@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐢</text></svg>" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TerpBuilds</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,700;1,400&family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@3/dist/email.min.js"></script>
+    <script>
+      // EmailJS setup instructions:
+      // 1. Sign up at https://www.emailjs.com/
+      // 2. Create a service (e.g., Gmail) — copy the Service ID as EMAILJS_SERVICE_ID
+      // 3. Create two email templates (application notice + acceptance/denial) — copy Template IDs
+      // 4. Account > API Keys — copy your Public Key
+      // 5. Replace "YOUR_PUBLIC_KEY" below with your actual Public Key
+      window.EMAILJS_SERVICE_ID = "service_2iwvvge";
+      window.EMAILJS_TEMPLATE_APPLY = "template_d0jmsfa";
+      window.EMAILJS_TEMPLATE_DECISION = "template_d0jmsfa";
+      window.EMAILJS_TEMPLATE_FEEDBACK = "template_d0jmsfa";
+      if (typeof emailjs !== 'undefined') emailjs.init("DynBPU_J0rIf49g_z");
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
