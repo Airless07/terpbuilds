@@ -1,5 +1,54 @@
 import { useState, useEffect, useRef } from 'react';
-import { getUsers, getDMs, saveDMs, dmKey, generateId, timeAgo, getCurrentUser } from '../utils/storage';
+import { getUsers, getDMs, saveDMs, dmKey, generateId, timeAgo } from '../utils/storage';
+
+function NewMessageModal({ onClose, onOpen, currentUserId }) {
+  const [userId, setUserId] = useState('');
+  const [error, setError] = useState('');
+
+  const submit = (e) => {
+    e.preventDefault();
+    setError('');
+    const target = getUsers().find(u => u.id === userId.trim() && u.id !== currentUserId);
+    if (!target) { setError('No user found with that ID.'); return; }
+    onOpen(target);
+    onClose();
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-box" style={{ maxWidth: 420 }} onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3 className="modal-title">💬 New Message</h3>
+          <button className="close-btn" onClick={onClose}>✕</button>
+        </div>
+
+        <p style={{ fontSize: '0.875rem', color: 'var(--text2)', marginBottom: '1.25rem' }}>
+          Paste a user's ID to start a conversation. You can find your own ID on your Profile page.
+        </p>
+
+        {error && <div className="alert alert-error" style={{ marginBottom: '1rem' }}>{error}</div>}
+
+        <form onSubmit={submit}>
+          <div className="form-group">
+            <label>Enter User ID</label>
+            <input
+              className="input"
+              value={userId}
+              onChange={e => setUserId(e.target.value)}
+              placeholder="e.g. lc9x2k4r7"
+              autoFocus
+              required
+            />
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem' }}>
+            <button className="btn btn-primary" type="submit">Open Conversation</button>
+            <button className="btn btn-ghost" type="button" onClick={onClose}>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
 
 export default function Messages({ currentUser, navigate }) {
   const [conversations, setConversations] = useState([]);
@@ -7,6 +56,7 @@ export default function Messages({ currentUser, navigate }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [allUsers, setAllUsers] = useState([]);
+  const [showNewModal, setShowNewModal] = useState(false);
   const endRef = useRef();
 
   useEffect(() => {
@@ -15,7 +65,7 @@ export default function Messages({ currentUser, navigate }) {
     setAllUsers(users);
     loadConversations(users);
 
-    // Check if a DM was opened from elsewhere (e.g. user popover)
+    // Check if a DM was opened from elsewhere (e.g. user popover / Friends page)
     const openId = localStorage.getItem('tb_open_dm');
     if (openId) {
       localStorage.removeItem('tb_open_dm');
@@ -40,11 +90,7 @@ export default function Messages({ currentUser, navigate }) {
         }
       }
     });
-    convos.sort((a, b) => {
-      const ta = a.lastMsg?.timestamp || 0;
-      const tb = b.lastMsg?.timestamp || 0;
-      return new Date(tb) - new Date(ta);
-    });
+    convos.sort((a, b) => new Date(b.lastMsg?.timestamp || 0) - new Date(a.lastMsg?.timestamp || 0));
     setConversations(convos);
   };
 
@@ -53,8 +99,6 @@ export default function Messages({ currentUser, navigate }) {
     const key = dmKey(currentUser.id, otherUser.id);
     const dms = getDMs();
     if (!dms[key]) dms[key] = { messages: [] };
-
-    // Mark as read
     dms[key].messages = dms[key].messages.map(m =>
       m.senderId !== currentUser.id ? { ...m, read: true } : m
     );
@@ -79,21 +123,13 @@ export default function Messages({ currentUser, navigate }) {
     loadConversations(allUsers);
   };
 
-  const startNewConvo = () => {
-    const id = prompt('Enter the email of the user you want to message:');
-    if (!id) return;
-    const user = allUsers.find(u => u.email.toLowerCase() === id.toLowerCase() && u.id !== currentUser.id);
-    if (!user) { alert('User not found.'); return; }
-    openConversation(user);
-  };
-
   if (!currentUser) return null;
 
   return (
     <div className="container" style={{ paddingTop: '2rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
         <h1 className="section-title">💬 <span>Messages</span></h1>
-        <button className="btn btn-primary btn-sm" onClick={startNewConvo}>+ New Message</button>
+        <button className="btn btn-primary btn-sm" onClick={() => setShowNewModal(true)}>+ New Message</button>
       </div>
 
       <div className="messages-layout">
@@ -117,9 +153,7 @@ export default function Messages({ currentUser, navigate }) {
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span className="convo-name">{c.other.displayName}</span>
-                    {c.unread > 0 && (
-                      <span className="badge" style={{ position: 'static' }}>{c.unread}</span>
-                    )}
+                    {c.unread > 0 && <span className="badge" style={{ position: 'static' }}>{c.unread}</span>}
                   </div>
                   <div className="convo-preview">{c.lastMsg?.text || 'No messages yet'}</div>
                 </div>
@@ -149,9 +183,7 @@ export default function Messages({ currentUser, navigate }) {
 
               <div className="chat-messages">
                 {messages.length === 0 && (
-                  <div className="empty-state" style={{ flex: 1 }}>
-                    <p>Start the conversation!</p>
-                  </div>
+                  <div className="empty-state" style={{ flex: 1 }}><p>Start the conversation!</p></div>
                 )}
                 {messages.map(m => {
                   const mine = m.senderId === currentUser.id;
@@ -187,6 +219,14 @@ export default function Messages({ currentUser, navigate }) {
           )}
         </div>
       </div>
+
+      {showNewModal && (
+        <NewMessageModal
+          currentUserId={currentUser.id}
+          onClose={() => setShowNewModal(false)}
+          onOpen={(user) => { setAllUsers(getUsers()); openConversation(user, getUsers()); }}
+        />
+      )}
     </div>
   );
 }

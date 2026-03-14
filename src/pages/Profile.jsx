@@ -196,6 +196,14 @@ export default function Profile({ currentUser, setCurrentUser, navigate, refresh
     refreshData();
   };
 
+  const [copied, setCopied] = useState(false);
+  const copyId = () => {
+    navigator.clipboard.writeText(currentUser.id).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
   const completedProjects = myProjects.filter(p => p.status === 'Completed');
   const initials = currentUser.displayName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
 
@@ -266,6 +274,35 @@ export default function Profile({ currentUser, setCurrentUser, navigate, refresh
               </div>
             )}
           </div>
+        </div>
+      </div>
+
+      {/* User ID section */}
+      <div className="card" style={{ marginBottom: '1.5rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.78rem', fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            Your User ID
+          </span>
+          <button
+            className="btn btn-outline btn-sm"
+            onClick={copyId}
+            style={{ fontSize: '0.78rem', minWidth: 90 }}
+          >
+            {copied ? '✓ Copied!' : '📋 Copy'}
+          </button>
+        </div>
+        <div style={{
+          fontFamily: 'var(--font-mono)', fontSize: '1rem', fontWeight: 700,
+          color: 'var(--maize)', background: 'var(--bg3)',
+          border: '1px solid rgba(255,210,0,0.25)', borderRadius: 'var(--radius-sm)',
+          padding: '0.6rem 1rem', letterSpacing: '0.05em',
+          boxShadow: '0 0 12px rgba(255,210,0,0.08)',
+          wordBreak: 'break-all',
+        }}>
+          {currentUser.id}
+        </div>
+        <div style={{ fontSize: '0.78rem', color: 'var(--text3)', marginTop: '0.5rem' }}>
+          Share this ID with others so they can message you directly.
         </div>
       </div>
 

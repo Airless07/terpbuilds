@@ -21,7 +21,7 @@ export default function Signup({ navigate, setCurrentUser }) {
 
     const users = getUsers();
     if (users.find(u => u.email.toLowerCase() === form.email.toLowerCase())) {
-      setError('An account with this email already exists.'); return;
+      setError('An account with this email already exists. Please log in instead.'); return;
     }
 
     const newUser = {
