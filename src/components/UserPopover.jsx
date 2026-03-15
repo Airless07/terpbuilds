@@ -1,10 +1,7 @@
 import { useEffect, useRef } from 'react';
-import {
-  getUsers, saveUsers, getCurrentUser, saveCurrentUser,
-  updateUserInStorage, addNotification, generateId
-} from '../utils/storage';
+import { updateUser, addNotification } from '../utils/storage';
 
-export default function UserPopover({ user, anchorPos, onClose, currentUser, setCurrentUser, navigate, refreshData }) {
+export default function UserPopover({ user, anchorPos, onClose, currentUser, setCurrentUser, navigate }) {
   const ref = useRef();
 
   useEffect(() => {
@@ -13,68 +10,49 @@ export default function UserPopover({ user, anchorPos, onClose, currentUser, set
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  if (!user) return null;
+  if (!user || !currentUser || currentUser.id === user.id) return null;
 
   const style = {
     top: Math.min(anchorPos.y, window.innerHeight - 320),
     left: Math.min(anchorPos.x, window.innerWidth - 300),
   };
 
-  const cu = getCurrentUser();
-  if (!cu || cu.id === user.id) return null;
+  const isFriend = currentUser.friends?.includes(user.id);
+  const isFollowing = currentUser.following?.includes(user.id);
+  const sentRequest = currentUser.friendRequests?.sent?.includes(user.id);
 
-  const isFriend = cu.friends?.includes(user.id);
-  const isFollowing = cu.following?.includes(user.id);
-  const sentRequest = cu.friendRequests?.sent?.includes(user.id);
-
-  const follow = () => {
-    const users = getUsers();
-    const me = users.find(u => u.id === cu.id);
-    const them = users.find(u => u.id === user.id);
-    if (!me || !them) return;
-    if (!me.following.includes(user.id)) {
-      me.following.push(user.id);
-      them.followers = them.followers || [];
-      them.followers.push(cu.id);
-      addNotification(user.id, { type: 'followed', text: `${cu.displayName} started following you.`, page: 'friends' });
-    }
-    updateUserInStorage(me);
-    updateUserInStorage(them);
-    saveCurrentUser(me);
+  const follow = async () => {
+    if (currentUser.following?.includes(user.id)) return;
+    const me = { ...currentUser, following: [...(currentUser.following || []), user.id] };
+    const them = { ...user, followers: [...(user.followers || []), currentUser.id] };
     setCurrentUser(me);
-    refreshData();
+    await updateUser(me.id, me);
+    await updateUser(them.id, them);
+    await addNotification(user.id, { type: 'followed', text: `${currentUser.displayName} started following you.`, page: 'friends' });
   };
 
-  const unfollow = () => {
-    const users = getUsers();
-    const me = users.find(u => u.id === cu.id);
-    const them = users.find(u => u.id === user.id);
-    if (!me || !them) return;
-    me.following = me.following.filter(id => id !== user.id);
-    them.followers = (them.followers || []).filter(id => id !== cu.id);
-    updateUserInStorage(me);
-    updateUserInStorage(them);
-    saveCurrentUser(me);
+  const unfollow = async () => {
+    const me = { ...currentUser, following: (currentUser.following || []).filter(id => id !== user.id) };
+    const them = { ...user, followers: (user.followers || []).filter(id => id !== currentUser.id) };
     setCurrentUser(me);
-    refreshData();
+    await updateUser(me.id, me);
+    await updateUser(them.id, them);
   };
 
-  const sendFriendRequest = () => {
-    const users = getUsers();
-    const me = users.find(u => u.id === cu.id);
-    const them = users.find(u => u.id === user.id);
-    if (!me || !them) return;
-    if (!me.friendRequests.sent.includes(user.id)) {
-      me.friendRequests.sent.push(user.id);
-      them.friendRequests = them.friendRequests || { sent: [], received: [] };
-      them.friendRequests.received.push(cu.id);
-      addNotification(user.id, { type: 'friendRequest', text: `${cu.displayName} sent you a friend request.`, page: 'friends' });
-    }
-    updateUserInStorage(me);
-    updateUserInStorage(them);
-    saveCurrentUser(me);
+  const sendFriendRequest = async () => {
+    if (currentUser.friendRequests?.sent?.includes(user.id)) return;
+    const me = {
+      ...currentUser,
+      friendRequests: { ...currentUser.friendRequests, sent: [...(currentUser.friendRequests?.sent || []), user.id] }
+    };
+    const them = {
+      ...user,
+      friendRequests: { ...user.friendRequests, received: [...(user.friendRequests?.received || []), currentUser.id] }
+    };
     setCurrentUser(me);
-    refreshData();
+    await updateUser(me.id, me);
+    await updateUser(them.id, them);
+    await addNotification(user.id, { type: 'friendRequest', text: `${currentUser.displayName} sent you a friend request.`, page: 'friends' });
   };
 
   const sendMessage = () => {

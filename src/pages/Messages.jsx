@@ -1,14 +1,14 @@
 import { useState, useEffect, useRef } from 'react';
-import { getUsers, getDMs, saveDMs, dmKey, generateId, timeAgo } from '../utils/storage';
+import { dmKey, generateId, timeAgo, sendDM, markDMsRead } from '../utils/storage';
 
-function NewMessageModal({ onClose, onOpen, currentUserId }) {
+function NewMessageModal({ onClose, onOpen, currentUserId, users }) {
   const [userId, setUserId] = useState('');
   const [error, setError] = useState('');
 
   const submit = (e) => {
     e.preventDefault();
     setError('');
-    const target = getUsers().find(u => u.id === userId.trim() && u.id !== currentUserId);
+    const target = users.find(u => u.id === userId.trim() && u.id !== currentUserId);
     if (!target) { setError('No user found with that ID.'); return; }
     onOpen(target);
     onClose();
@@ -35,7 +35,7 @@ function NewMessageModal({ onClose, onOpen, currentUserId }) {
               className="input"
               value={userId}
               onChange={e => setUserId(e.target.value)}
-              placeholder="e.g. lc9x2k4r7"
+              placeholder="Paste user ID here"
               autoFocus
               required
             />
@@ -50,78 +50,64 @@ function NewMessageModal({ onClose, onOpen, currentUserId }) {
   );
 }
 
-export default function Messages({ currentUser, navigate }) {
-  const [conversations, setConversations] = useState([]);
-  const [activeConvo, setActiveConvo] = useState(null);
-  const [messages, setMessages] = useState([]);
+export default function Messages({ currentUser, navigate, dms, users }) {
+  const [activeConvoKey, setActiveConvoKey] = useState(null);
   const [input, setInput] = useState('');
-  const [allUsers, setAllUsers] = useState([]);
   const [showNewModal, setShowNewModal] = useState(false);
   const endRef = useRef();
 
   useEffect(() => {
     if (!currentUser) { navigate('login'); return; }
-    const users = getUsers();
-    setAllUsers(users);
-    loadConversations(users);
-
-    // Check if a DM was opened from elsewhere (e.g. user popover / Friends page)
     const openId = localStorage.getItem('tb_open_dm');
     if (openId) {
       localStorage.removeItem('tb_open_dm');
-      const user = users.find(u => u.id === openId);
-      if (user) setTimeout(() => openConversation(user, users), 100);
+      const key = dmKey(currentUser.id, openId);
+      setActiveConvoKey(key);
     }
   }, [currentUser]);
 
+  const activeConvo = dms.find(d => d.id === activeConvoKey);
+  const messages = activeConvo?.messages || [];
+
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
-  const loadConversations = (users) => {
-    const dms = getDMs();
-    const convos = [];
-    Object.keys(dms).forEach(key => {
-      if (key.includes(currentUser.id)) {
-        const otherId = key.replace(currentUser.id, '').replace('::', '');
-        const other = users.find(u => u.id === otherId);
-        if (other) {
-          const msgs = dms[key].messages || [];
-          const unread = msgs.filter(m => !m.read && m.senderId !== currentUser.id).length;
-          convos.push({ key, other, lastMsg: msgs[msgs.length - 1], unread });
-        }
-      }
-    });
-    convos.sort((a, b) => new Date(b.lastMsg?.timestamp || 0) - new Date(a.lastMsg?.timestamp || 0));
-    setConversations(convos);
-  };
+  const conversations = dms
+    .filter(d => d.participants?.includes(currentUser?.id))
+    .map(d => {
+      const otherId = d.participants?.find(id => id !== currentUser.id);
+      const other = users.find(u => u.id === otherId);
+      if (!other) return null;
+      const msgs = d.messages || [];
+      const unread = msgs.filter(m => !m.read && m.senderId !== currentUser.id).length;
+      return { key: d.id, other, lastMsg: msgs[msgs.length - 1], unread };
+    })
+    .filter(Boolean)
+    .sort((a, b) => new Date(b.lastMsg?.timestamp || 0) - new Date(a.lastMsg?.timestamp || 0));
 
-  const openConversation = (otherUser, usersArg) => {
-    const users = usersArg || allUsers;
+  const openConversation = async (otherUser) => {
     const key = dmKey(currentUser.id, otherUser.id);
-    const dms = getDMs();
-    if (!dms[key]) dms[key] = { messages: [] };
-    dms[key].messages = dms[key].messages.map(m =>
-      m.senderId !== currentUser.id ? { ...m, read: true } : m
-    );
-    saveDMs(dms);
-    setActiveConvo({ key, other: otherUser });
-    setMessages(dms[key].messages);
-    loadConversations(users);
+    setActiveConvoKey(key);
+    const convo = dms.find(d => d.id === key);
+    if (convo && convo.messages?.some(m => !m.read && m.senderId !== currentUser.id)) {
+      await markDMsRead(key, currentUser.id, convo.messages || []);
+    }
   };
 
-  const sendMessage = () => {
-    if (!input.trim() || !activeConvo) return;
-    const dms = getDMs();
-    if (!dms[activeConvo.key]) dms[activeConvo.key] = { messages: [] };
+  const sendMessage = async () => {
+    if (!input.trim() || !activeConvoKey) return;
+    const otherId = activeConvoKey.split('::').find(id => id !== currentUser.id);
+    const participants = activeConvo?.participants || [currentUser.id, otherId];
     const msg = {
       id: generateId(), senderId: currentUser.id, senderName: currentUser.displayName,
       text: input.trim(), timestamp: new Date().toISOString(), read: false
     };
-    dms[activeConvo.key].messages.push(msg);
-    saveDMs(dms);
-    setMessages([...dms[activeConvo.key].messages]);
     setInput('');
-    loadConversations(allUsers);
+    await sendDM(activeConvoKey, participants, msg);
   };
+
+  const activeOther = activeConvo
+    ? users.find(u => u.id === activeConvo.participants?.find(id => id !== currentUser.id))
+    : null;
 
   if (!currentUser) return null;
 
@@ -144,7 +130,7 @@ export default function Messages({ currentUser, navigate }) {
             conversations.map(c => (
               <div
                 key={c.key}
-                className={`convo-item ${activeConvo?.key === c.key ? 'active' : ''}`}
+                className={`convo-item ${activeConvoKey === c.key ? 'active' : ''}`}
                 onClick={() => openConversation(c.other)}
               >
                 <div className="user-avatar" style={{ width: 36, height: 36, fontSize: '0.8rem', flexShrink: 0 }}>
@@ -164,7 +150,7 @@ export default function Messages({ currentUser, navigate }) {
 
         {/* Chat panel */}
         <div className="chat-panel">
-          {!activeConvo ? (
+          {!activeConvoKey ? (
             <div className="empty-state" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
               <div className="empty-icon">💬</div>
               <p>Select a conversation or start a new one.</p>
@@ -172,13 +158,17 @@ export default function Messages({ currentUser, navigate }) {
           ) : (
             <>
               <div style={{ padding: '0.85rem 1rem', borderBottom: '1px solid var(--border)', background: 'var(--bg2)', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                <div className="user-avatar" style={{ width: 34, height: 34, fontSize: '0.8rem' }}>
-                  {activeConvo.other.displayName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
-                </div>
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{activeConvo.other.displayName}</div>
-                  <div style={{ fontSize: '0.72rem', color: 'var(--text3)' }}>{activeConvo.other.email}</div>
-                </div>
+                {activeOther && (
+                  <>
+                    <div className="user-avatar" style={{ width: 34, height: 34, fontSize: '0.8rem' }}>
+                      {activeOther.displayName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
+                    </div>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{activeOther.displayName}</div>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--text3)' }}>{activeOther.email}</div>
+                    </div>
+                  </>
+                )}
               </div>
 
               <div className="chat-messages">
@@ -211,7 +201,7 @@ export default function Messages({ currentUser, navigate }) {
                   value={input}
                   onChange={e => setInput(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && sendMessage()}
-                  placeholder={`Message ${activeConvo.other.displayName}...`}
+                  placeholder={activeOther ? `Message ${activeOther.displayName}...` : 'Send a message...'}
                 />
                 <button className="btn btn-primary btn-sm" onClick={sendMessage}>Send</button>
               </div>
@@ -223,8 +213,9 @@ export default function Messages({ currentUser, navigate }) {
       {showNewModal && (
         <NewMessageModal
           currentUserId={currentUser.id}
+          users={users}
           onClose={() => setShowNewModal(false)}
-          onOpen={(user) => { setAllUsers(getUsers()); openConversation(user, getUsers()); }}
+          onOpen={(user) => openConversation(user)}
         />
       )}
     </div>

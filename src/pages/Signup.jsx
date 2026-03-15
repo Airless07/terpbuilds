@@ -1,54 +1,50 @@
 import { useState } from 'react';
 import TagInput from '../components/TagInput';
-import { getUsers, saveUsers, saveCurrentUser, encodePassword, generateId } from '../utils/storage';
+import { signUpUser } from '../utils/storage';
 
-export default function Signup({ navigate, setCurrentUser }) {
+export default function Signup({ navigate }) {
   const [form, setForm] = useState({
     displayName: '', email: '', password: '', confirm: '',
-    github: '', linkedin: '', website: ''
+    github: '', linkedin: '', website: '',
   });
   const [skills, setSkills] = useState([]);
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
   const set = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
 
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault();
     setError('');
     if (form.password !== form.confirm) { setError('Passwords do not match.'); return; }
     if (form.password.length < 6) { setError('Password must be at least 6 characters.'); return; }
-    if (!form.email.includes('@')) { setError('Please enter a valid email.'); return; }
 
-    const users = getUsers();
-    if (users.find(u => u.email.toLowerCase() === form.email.toLowerCase())) {
-      setError('An account with this email already exists. Please log in instead.'); return;
+    setLoading(true);
+    try {
+      await signUpUser(form.email, form.password, {
+        displayName: form.displayName,
+        skills,
+        github: form.github,
+        linkedin: form.linkedin,
+        website: form.website,
+      });
+      navigate('home');
+    } catch (err) {
+      const msg = err.message || '';
+      if (msg.includes('already registered') || msg.includes('already been registered')) {
+        setError('An account with this email already exists. Please log in instead.');
+      } else if (msg.includes('invalid email') || msg.includes('valid email')) {
+        setError('Please enter a valid email address.');
+      } else if (msg.includes('password') && msg.includes('6')) {
+        setError('Password must be at least 6 characters.');
+      } else if (msg.includes('Email not confirmed')) {
+        setError('Account created! Please check your email to confirm your account, then sign in.');
+      } else {
+        setError('Sign up failed. Please try again.');
+      }
+    } finally {
+      setLoading(false);
     }
-
-    const newUser = {
-      id: generateId(),
-      displayName: form.displayName,
-      email: form.email,
-      // NOTE: In production, use bcrypt or Argon2. Base64 is NOT secure password hashing.
-      passwordEncoded: encodePassword(form.password),
-      skills,
-      github: form.github,
-      linkedin: form.linkedin,
-      website: form.website,
-      trustScore: 0,
-      ratings: [],
-      friends: [],
-      friendRequests: { sent: [], received: [] },
-      following: [],
-      followers: [],
-      savedProjects: [],
-      createdAt: new Date().toISOString(),
-    };
-
-    users.push(newUser);
-    saveUsers(users);
-    saveCurrentUser(newUser);
-    setCurrentUser(newUser);
-    navigate('home');
   };
 
   return (
@@ -101,8 +97,8 @@ export default function Signup({ navigate, setCurrentUser }) {
             <input className="input" value={form.website} onChange={e => set('website', e.target.value)}
               placeholder="https://yoursite.com" />
           </div>
-          <button className="btn btn-primary w-full" type="submit" style={{ width: '100%', marginTop: '0.5rem' }}>
-            Create Account
+          <button className="btn btn-primary w-full" type="submit" disabled={loading} style={{ width: '100%', marginTop: '0.5rem' }}>
+            {loading ? 'Creating account...' : 'Create Account'}
           </button>
         </form>
 

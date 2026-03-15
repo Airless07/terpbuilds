@@ -1,8 +1,5 @@
-import { useState, useEffect } from 'react';
-import {
-  getUsers, getCurrentUser, updateUserInStorage, saveCurrentUser,
-  addNotification, getDMs, saveDMs, dmKey, generateId
-} from '../utils/storage';
+import { useState } from 'react';
+import { updateUser, addNotification, dmKey } from '../utils/storage';
 
 function UserCard({ user, currentUser, onAction, navigate }) {
   if (!user || user.id === currentUser?.id) return null;
@@ -55,12 +52,9 @@ function UserCard({ user, currentUser, onAction, navigate }) {
   );
 }
 
-export default function Friends({ currentUser, setCurrentUser, navigate, refreshData, users }) {
+export default function Friends({ currentUser, setCurrentUser, navigate, users }) {
   const [tab, setTab] = useState('friends');
   const [search, setSearch] = useState('');
-  const [allUsers, setAllUsers] = useState(users);
-
-  useEffect(() => { setAllUsers(getUsers()); }, [users]);
 
   if (!currentUser) {
     return (
@@ -74,64 +68,62 @@ export default function Friends({ currentUser, setCurrentUser, navigate, refresh
     );
   }
 
-  const cu = allUsers.find(u => u.id === currentUser.id) || currentUser;
-  const friends = allUsers.filter(u => cu.friends?.includes(u.id));
-  const following = allUsers.filter(u => cu.following?.includes(u.id));
-  const pendingRequests = allUsers.filter(u => cu.friendRequests?.received?.includes(u.id));
+  const cu = users.find(u => u.id === currentUser.id) || currentUser;
+  const friends = users.filter(u => cu.friends?.includes(u.id));
+  const following = users.filter(u => cu.following?.includes(u.id));
+  const pendingRequests = users.filter(u => cu.friendRequests?.received?.includes(u.id));
 
-  const doAction = (action, targetUser) => {
-    const users = getUsers();
-    const me = users.find(u => u.id === cu.id);
+  const doAction = async (action, targetUser) => {
+    const me = { ...cu };
     const them = users.find(u => u.id === targetUser.id);
-    if (!me || !them) return;
+    if (!them) return;
+    const themCopy = { ...them };
 
     switch (action) {
       case 'addFriend':
-        if (!me.friendRequests.sent.includes(them.id)) {
-          me.friendRequests.sent = [...(me.friendRequests.sent || []), them.id];
-          them.friendRequests = them.friendRequests || { sent: [], received: [] };
-          them.friendRequests.received = [...(them.friendRequests.received || []), me.id];
-          addNotification(them.id, { type: 'friendRequest', text: `${me.displayName} sent you a friend request.`, page: 'friends' });
+        if (!me.friendRequests?.sent?.includes(them.id)) {
+          me.friendRequests = { ...me.friendRequests, sent: [...(me.friendRequests?.sent || []), them.id] };
+          themCopy.friendRequests = { ...themCopy.friendRequests, received: [...(themCopy.friendRequests?.received || []), me.id] };
+          await addNotification(them.id, { type: 'friendRequest', text: `${me.displayName} sent you a friend request.`, page: 'friends' });
         }
         break;
       case 'acceptFriend':
         me.friends = [...(me.friends || []), them.id];
-        them.friends = [...(them.friends || []), me.id];
-        me.friendRequests.received = (me.friendRequests.received || []).filter(id => id !== them.id);
-        them.friendRequests.sent = (them.friendRequests.sent || []).filter(id => id !== me.id);
-        addNotification(them.id, { type: 'friendRequest', text: `${me.displayName} accepted your friend request!`, page: 'friends' });
+        themCopy.friends = [...(themCopy.friends || []), me.id];
+        me.friendRequests = { ...me.friendRequests, received: (me.friendRequests?.received || []).filter(id => id !== them.id) };
+        themCopy.friendRequests = { ...themCopy.friendRequests, sent: (themCopy.friendRequests?.sent || []).filter(id => id !== me.id) };
+        await addNotification(them.id, { type: 'friendRequest', text: `${me.displayName} accepted your friend request!`, page: 'friends' });
         break;
       case 'denyFriend':
-        me.friendRequests.received = (me.friendRequests.received || []).filter(id => id !== them.id);
-        them.friendRequests.sent = (them.friendRequests.sent || []).filter(id => id !== me.id);
+        me.friendRequests = { ...me.friendRequests, received: (me.friendRequests?.received || []).filter(id => id !== them.id) };
+        themCopy.friendRequests = { ...themCopy.friendRequests, sent: (themCopy.friendRequests?.sent || []).filter(id => id !== me.id) };
         break;
       case 'removeFriend':
         me.friends = (me.friends || []).filter(id => id !== them.id);
-        them.friends = (them.friends || []).filter(id => id !== me.id);
+        themCopy.friends = (themCopy.friends || []).filter(id => id !== me.id);
         break;
       case 'follow':
-        if (!me.following.includes(them.id)) {
+        if (!me.following?.includes(them.id)) {
           me.following = [...(me.following || []), them.id];
-          them.followers = [...(them.followers || []), me.id];
-          addNotification(them.id, { type: 'followed', text: `${me.displayName} started following you.`, page: 'friends' });
+          themCopy.followers = [...(themCopy.followers || []), me.id];
+          await addNotification(them.id, { type: 'followed', text: `${me.displayName} started following you.`, page: 'friends' });
         }
         break;
       case 'unfollow':
         me.following = (me.following || []).filter(id => id !== them.id);
-        them.followers = (them.followers || []).filter(id => id !== me.id);
+        themCopy.followers = (themCopy.followers || []).filter(id => id !== me.id);
+        break;
+      default:
         break;
     }
 
-    updateUserInStorage(me);
-    updateUserInStorage(them);
-    saveCurrentUser(me);
     setCurrentUser(me);
-    setAllUsers(getUsers());
-    refreshData();
+    await updateUser(me.id, me);
+    await updateUser(themCopy.id, themCopy);
   };
 
   const discoverSearch = search.toLowerCase();
-  const discover = allUsers.filter(u =>
+  const discover = users.filter(u =>
     u.id !== cu.id &&
     !cu.friends?.includes(u.id) &&
     (discoverSearch === '' ||

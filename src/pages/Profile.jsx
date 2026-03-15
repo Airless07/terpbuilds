@@ -1,10 +1,7 @@
 import { useState, useEffect } from 'react';
 import TagInput from '../components/TagInput';
 import ProjectCard from '../components/ProjectCard';
-import {
-  getUsers, getProjects, saveProjects, getCurrentUser, updateUserInStorage,
-  saveCurrentUser, generateId, addNotification
-} from '../utils/storage';
+import { updateUser, updateProject, deleteProject as deleteProjectDB, addNotification } from '../utils/storage';
 
 function StarRating({ value, onChange }) {
   const [hover, setHover] = useState(0);
@@ -52,7 +49,7 @@ function ApplicantsModal({ project, onClose, onAction }) {
   );
 }
 
-function RateTeammatesModal({ project, currentUserId, onClose, onRate }) {
+function RateTeammatesModal({ project, currentUserId, onClose, onRate, users }) {
   const [ratings, setRatings] = useState({});
   const [reviews, setReviews] = useState({});
   const teammates = (project.membersAccepted || []).filter(uid => uid !== currentUserId);
@@ -75,7 +72,6 @@ function RateTeammatesModal({ project, currentUserId, onClose, onRate }) {
           <div className="empty-state"><p>No teammates to rate.</p></div>
         ) : (
           teammates.map(uid => {
-            const users = getUsers();
             const u = users.find(x => x.id === uid);
             if (!u) return null;
             return (
@@ -97,12 +93,10 @@ function RateTeammatesModal({ project, currentUserId, onClose, onRate }) {
   );
 }
 
-export default function Profile({ currentUser, setCurrentUser, navigate, refreshData, openPanel }) {
+export default function Profile({ currentUser, setCurrentUser, navigate, openPanel, projects, users }) {
   const [editMode, setEditMode] = useState(false);
   const [form, setForm] = useState({ displayName: '', github: '', linkedin: '', website: '' });
   const [skills, setSkills] = useState([]);
-  const [myProjects, setMyProjects] = useState([]);
-  const [savedProjects, setSavedProjects] = useState([]);
   const [applicantsModal, setApplicantsModal] = useState(null);
   const [rateModal, setRateModal] = useState(null);
   const [profileTab, setProfileTab] = useState('projects');
@@ -110,9 +104,6 @@ export default function Profile({ currentUser, setCurrentUser, navigate, refresh
 
   useEffect(() => {
     if (!currentUser) { navigate('login'); return; }
-    const projects = getProjects();
-    setMyProjects(projects.filter(p => p.ownerId === currentUser.id));
-    setSavedProjects(projects.filter(p => currentUser.savedProjects?.includes(p.id)));
     setForm({
       displayName: currentUser.displayName,
       github: currentUser.github || '',
@@ -124,76 +115,64 @@ export default function Profile({ currentUser, setCurrentUser, navigate, refresh
 
   if (!currentUser) return null;
 
-  const saveProfile = () => {
-    const users = getUsers();
-    const me = users.find(u => u.id === currentUser.id);
-    if (!me) return;
-    const updated = { ...me, ...form, skills };
-    updateUserInStorage(updated);
-    saveCurrentUser(updated);
+  const myProjects = projects.filter(p => p.ownerId === currentUser.id);
+  const savedProjects = projects.filter(p => currentUser.savedProjects?.includes(p.id));
+  const completedProjects = myProjects.filter(p => p.status === 'Completed');
+
+  const saveProfile = async () => {
+    const updated = { ...currentUser, ...form, skills };
     setCurrentUser(updated);
     setEditMode(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
-    refreshData();
+    await updateUser(currentUser.id, { displayName: form.displayName, github: form.github, linkedin: form.linkedin, website: form.website, skills });
   };
 
-  const handleApplicantAction = (action, project, applicant) => {
-    const projects = getProjects();
-    const idx = projects.findIndex(p => p.id === project.id);
-    if (idx === -1) return;
+  const handleApplicantAction = async (action, project, applicant) => {
+    const proj = projects.find(p => p.id === project.id);
+    if (!proj) return;
 
-    const appIdx = projects[idx].applicants.findIndex(a => a.userId === applicant.userId);
-    if (appIdx === -1) return;
+    const updatedApplicants = proj.applicants.map(a =>
+      a.userId === applicant.userId ? { ...a, status: action === 'accept' ? 'accepted' : 'denied' } : a
+    );
+    const updatedMembers = action === 'accept' && !proj.membersAccepted.includes(applicant.userId)
+      ? [...proj.membersAccepted, applicant.userId]
+      : proj.membersAccepted;
 
-    if (action === 'accept') {
-      projects[idx].applicants[appIdx].status = 'accepted';
-      if (!projects[idx].membersAccepted.includes(applicant.userId)) {
-        projects[idx].membersAccepted.push(applicant.userId);
-      }
-      addNotification(applicant.userId, { type: 'accepted', text: `You were accepted to "${project.title}"!`, page: 'projects' });
-    } else {
-      projects[idx].applicants[appIdx].status = 'denied';
-      addNotification(applicant.userId, { type: 'denied', text: `Your application to "${project.title}" was not accepted.`, page: 'projects' });
-    }
-
-    saveProjects(projects);
-    setMyProjects(projects.filter(p => p.ownerId === currentUser.id));
-    setApplicantsModal(projects[idx]);
-    refreshData();
+    await updateProject(proj.id, { applicants: updatedApplicants, membersAccepted: updatedMembers });
+    await addNotification(applicant.userId, {
+      type: action === 'accept' ? 'accepted' : 'denied',
+      text: action === 'accept'
+        ? `You were accepted to "${project.title}"!`
+        : `Your application to "${project.title}" was not accepted.`,
+      page: 'projects'
+    });
+    setApplicantsModal(null);
   };
 
-  const handleRate = (targetUserId, score, review, projectId) => {
-    const users = getUsers();
+  const handleRate = async (targetUserId, score, review, projectId) => {
     const target = users.find(u => u.id === targetUserId);
     if (!target) return;
-    target.ratings = target.ratings || [];
-    const existingIdx = target.ratings.findIndex(r => r.from === currentUser.id && r.projectId === projectId);
+    const ratings = target.ratings || [];
+    const existingIdx = ratings.findIndex(r => r.from === currentUser.id && r.projectId === projectId);
     const ratingEntry = { from: currentUser.id, score, review, projectId };
-    if (existingIdx !== -1) target.ratings[existingIdx] = ratingEntry;
-    else target.ratings.push(ratingEntry);
-    target.trustScore = target.ratings.reduce((sum, r) => sum + r.score, 0) / target.ratings.length;
-    updateUserInStorage(target);
-    addNotification(targetUserId, { type: 'rated', text: `${currentUser.displayName} rated you ⭐${score}/5!`, page: 'profile' });
-    refreshData();
+    const updatedRatings = existingIdx !== -1
+      ? ratings.map((r, i) => i === existingIdx ? ratingEntry : r)
+      : [...ratings, ratingEntry];
+    const trustScore = updatedRatings.reduce((sum, r) => sum + r.score, 0) / updatedRatings.length;
+    await updateUser(targetUserId, { ratings: updatedRatings, trustScore });
+    await addNotification(targetUserId, { type: 'rated', text: `${currentUser.displayName} rated you ⭐${score}/5!`, page: 'profile' });
   };
 
-  const deleteProject = (projectId) => {
+  const handleDeleteProject = async (projectId) => {
     if (!confirm('Delete this project? This cannot be undone.')) return;
-    const projects = getProjects();
-    saveProjects(projects.filter(p => p.id !== projectId));
-    setMyProjects(prev => prev.filter(p => p.id !== projectId));
-    refreshData();
+    await deleteProjectDB(projectId);
   };
 
-  const unsaveProject = (projectId) => {
-    const cu = getCurrentUser();
-    const updated = { ...cu, savedProjects: (cu.savedProjects || []).filter(id => id !== projectId) };
-    updateUserInStorage(updated);
-    saveCurrentUser(updated);
-    setCurrentUser(updated);
-    setSavedProjects(prev => prev.filter(p => p.id !== projectId));
-    refreshData();
+  const unsaveProject = async (projectId) => {
+    const newSaved = (currentUser.savedProjects || []).filter(id => id !== projectId);
+    setCurrentUser({ ...currentUser, savedProjects: newSaved });
+    await updateUser(currentUser.id, { savedProjects: newSaved });
   };
 
   const [copied, setCopied] = useState(false);
@@ -204,7 +183,6 @@ export default function Profile({ currentUser, setCurrentUser, navigate, refresh
     });
   };
 
-  const completedProjects = myProjects.filter(p => p.status === 'Completed');
   const initials = currentUser.displayName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
 
   const TABS = [
@@ -333,12 +311,12 @@ export default function Profile({ currentUser, setCurrentUser, navigate, refresh
               {myProjects.map(p => (
                 <div key={p.id} style={{ position: 'relative' }}>
                   <ProjectCard project={p} currentUser={currentUser} setCurrentUser={setCurrentUser}
-                    openPanel={openPanel} refreshData={refreshData} animClass="card-enter" />
+                    openPanel={openPanel} animClass="card-enter" />
                   <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
                     <button className="btn btn-outline btn-sm" onClick={() => setApplicantsModal(p)}>
                       👥 Applicants ({p.applicants?.filter(a => a.status === 'pending').length || 0})
                     </button>
-                    <button className="btn btn-danger btn-sm" onClick={() => deleteProject(p.id)}>🗑 Delete</button>
+                    <button className="btn btn-danger btn-sm" onClick={() => handleDeleteProject(p.id)}>🗑 Delete</button>
                   </div>
                 </div>
               ))}
@@ -361,7 +339,7 @@ export default function Profile({ currentUser, setCurrentUser, navigate, refresh
               {savedProjects.map(p => (
                 <div key={p.id}>
                   <ProjectCard project={p} currentUser={currentUser} setCurrentUser={setCurrentUser}
-                    openPanel={openPanel} refreshData={refreshData} animClass="card-enter" />
+                    openPanel={openPanel} animClass="card-enter" />
                   <button className="btn btn-ghost btn-sm" style={{ marginTop: '0.4rem', color: 'var(--text3)' }}
                     onClick={() => unsaveProject(p.id)}>✕ Unsave</button>
                 </div>
@@ -410,6 +388,7 @@ export default function Profile({ currentUser, setCurrentUser, navigate, refresh
         <RateTeammatesModal
           project={rateModal}
           currentUserId={currentUser.id}
+          users={users}
           onClose={() => setRateModal(null)}
           onRate={handleRate}
         />

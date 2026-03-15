@@ -1,54 +1,55 @@
 import { useState } from 'react';
 import TagInput from '../components/TagInput';
-import { getProjects, saveProjects, generateId } from '../utils/storage';
+import { addProject } from '../utils/storage';
 
 const STATUSES = ['Recruiting', 'Active', 'In Progress', 'Completed'];
 
-export default function PostProject({ currentUser, navigate, refreshData }) {
+export default function PostProject({ currentUser, navigate }) {
   const [form, setForm] = useState({
     title: '', description: '', teamSize: 3, timeline: '', contact: currentUser?.email || '', status: 'Recruiting'
   });
   const [skills, setSkills] = useState([]);
   const [tags, setTags] = useState([]);
   const [success, setSuccess] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   const set = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
 
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault();
     if (!currentUser) { navigate('login'); return; }
     if (!form.title.trim() || !form.description.trim()) return;
-
-    const newProject = {
-      id: generateId(),
-      ownerId: currentUser.id,
-      ownerName: currentUser.displayName,
-      title: form.title.trim(),
-      description: form.description.trim(),
-      skills,
-      tags,
-      teamSize: parseInt(form.teamSize) || 3,
-      membersAccepted: [currentUser.id],
-      status: form.status,
-      timeline: form.timeline,
-      contact: form.contact,
-      bookmarks: 0,
-      applicants: [],
-      comments: [],
-      announcements: [],
-      updates: [],
-      roomMessages: [],
-      availability: { dateRange: null, slots: {} },
-      fileLinks: [],
-      createdAt: new Date().toISOString(),
-    };
-
-    const projects = getProjects();
-    projects.unshift(newProject);
-    saveProjects(projects);
-    refreshData();
-    setSuccess(true);
-    setTimeout(() => navigate('projects'), 2000);
+    setLoading(true);
+    try {
+      await addProject({
+        ownerId: currentUser.id,
+        ownerName: currentUser.displayName,
+        title: form.title.trim(),
+        description: form.description.trim(),
+        skills,
+        tags,
+        teamSize: parseInt(form.teamSize) || 3,
+        membersAccepted: [currentUser.id],
+        status: form.status,
+        timeline: form.timeline,
+        contact: form.contact,
+        bookmarks: 0,
+        applicants: [],
+        comments: [],
+        announcements: [],
+        updates: [],
+        roomMessages: [],
+        availability: { dateRange: null, slots: {} },
+        fileLinks: [],
+        createdAt: new Date().toISOString(),
+      });
+      setSuccess(true);
+      setTimeout(() => navigate('projects'), 2000);
+    } catch (err) {
+      console.error('Error posting project:', err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (success) {
@@ -117,7 +118,9 @@ export default function PostProject({ currentUser, navigate, refreshData }) {
         </div>
 
         <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
-          <button className="btn btn-primary" type="submit">🚀 Post Project</button>
+          <button className="btn btn-primary" type="submit" disabled={loading}>
+            {loading ? 'Posting...' : '🚀 Post Project'}
+          </button>
           <button className="btn btn-ghost" type="button" onClick={() => navigate('projects')}>Cancel</button>
         </div>
       </form>

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { getProjects, saveProjects, generateId, timeAgo } from '../utils/storage';
+import { generateId, timeAgo } from '../utils/storage';
 
 function ChatTab({ project, currentUser, updateProject }) {
   const [msg, setMsg] = useState('');
@@ -7,15 +7,15 @@ function ChatTab({ project, currentUser, updateProject }) {
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [project.roomMessages]);
 
-  const send = () => {
+  const send = async () => {
     if (!msg.trim() || !currentUser) return;
     const newMsg = {
       id: generateId(), userId: currentUser.id, userName: currentUser.displayName,
       text: msg.trim(), timestamp: new Date().toISOString()
     };
     const updated = { ...project, roomMessages: [...(project.roomMessages || []), newMsg] };
-    updateProject(updated);
     setMsg('');
+    await updateProject(updated);
   };
 
   return (
@@ -78,21 +78,21 @@ function SchedulerTab({ project, currentUser, updateProject }) {
   const dates = getDates();
   const mySlots = slots[currentUser?.id] || [];
 
-  const toggleSlot = (date, hour) => {
+  const toggleSlot = async (date, hour) => {
     const key = `${date}_${hour}`;
     const myUpdated = mySlots.includes(key) ? mySlots.filter(s => s !== key) : [...mySlots, key];
     const newSlots = { ...slots, [currentUser.id]: myUpdated };
     setSlots(newSlots);
     const updated = { ...project, availability: { dateRange: { start: startDate, end: endDate }, slots: newSlots } };
-    updateProject(updated);
+    await updateProject(updated);
   };
 
   const getOverlapCount = (key) => Object.values(slots).filter(s => s.includes(key)).length;
   const memberCount = project.membersAccepted?.length || 1;
 
-  const saveRange = () => {
+  const saveRange = async () => {
     const updated = { ...project, availability: { dateRange: { start: startDate, end: endDate }, slots } };
-    updateProject(updated);
+    await updateProject(updated);
   };
 
   return (
@@ -165,17 +165,17 @@ function FilesTab({ project, currentUser, updateProject }) {
   const [label, setLabel] = useState('');
   const [url, setUrl] = useState('');
 
-  const addLink = () => {
+  const addLink = async () => {
     if (!label.trim() || !url.trim()) return;
     const newLink = { id: generateId(), label: label.trim(), url: url.trim(), addedBy: currentUser.displayName, timestamp: new Date().toISOString() };
     const updated = { ...project, fileLinks: [...(project.fileLinks || []), newLink] };
-    updateProject(updated);
     setLabel(''); setUrl('');
+    await updateProject(updated);
   };
 
-  const remove = (id) => {
+  const remove = async (id) => {
     const updated = { ...project, fileLinks: project.fileLinks.filter(f => f.id !== id) };
-    updateProject(updated);
+    await updateProject(updated);
   };
 
   const ICONS = { github: '🐙', figma: '🎨', docs: '📄', default: '🔗' };
@@ -204,7 +204,7 @@ function FilesTab({ project, currentUser, updateProject }) {
               <a href={f.url} target="_blank" rel="noopener noreferrer">{f.label}</a>
               <div style={{ fontSize: '0.72rem', color: 'var(--text3)' }}>Added by {f.addedBy} · {timeAgo(f.timestamp)}</div>
             </div>
-            {(currentUser?.id === project.ownerId || currentUser?.id === f.addedBy) && (
+            {(currentUser?.id === project.ownerId || currentUser?.displayName === f.addedBy) && (
               <button className="btn btn-ghost btn-sm" onClick={() => remove(f.id)} style={{ color: 'var(--text3)' }}>✕</button>
             )}
           </div>

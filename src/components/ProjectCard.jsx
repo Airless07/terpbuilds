@@ -1,10 +1,7 @@
-import { useState } from 'react';
-import { getProjects, saveProjects, getCurrentUser, saveCurrentUser,
-  updateUserInStorage, timeAgo } from '../utils/storage';
+import { updateProject, updateUser, timeAgo } from '../utils/storage';
 
 function StatusBadge({ status }) {
-  const cls = 'status-' + status.replace(' ', '-');
-  return <span className={`status-badge ${cls}`}>{status}</span>;
+  return <span className={`status-badge status-${status.replace(' ', '-')}`}>{status}</span>;
 }
 
 function SpotsBar({ filled, total }) {
@@ -12,50 +9,33 @@ function SpotsBar({ filled, total }) {
   return (
     <div className="spots-bar">
       <span>👥</span>
-      <div className="spots-track">
-        <div className="spots-fill" style={{ width: `${pct}%` }} />
-      </div>
+      <div className="spots-track"><div className="spots-fill" style={{ width: `${pct}%` }} /></div>
       <span>{filled}/{total}</span>
     </div>
   );
 }
 
-export default function ProjectCard({ project: initProject, currentUser, setCurrentUser, openPanel, refreshData, style, animClass }) {
-  const [project, setProject] = useState(initProject);
-
-  const isTrending = (project.bookmarks + project.applicants.length) >= 10;
+export default function ProjectCard({ project, currentUser, openPanel }) {
+  const isTrending = (project.bookmarks + (project.applicants?.length || 0)) >= 10;
   const isSaved = currentUser?.savedProjects?.includes(project.id);
 
-  const toggleSave = (e) => {
+  const toggleSave = async (e) => {
     e.stopPropagation();
-    const cu = getCurrentUser();
-    if (!cu) return;
-    const saved = cu.savedProjects || [];
-    const next = saved.includes(project.id) ? saved.filter(id => id !== project.id) : [...saved, project.id];
-    const updated = { ...cu, savedProjects: next };
-    saveCurrentUser(updated);
-    setCurrentUser(updated);
-
-    // Update project bookmark count
-    const projects = getProjects();
-    const idx = projects.findIndex(p => p.id === project.id);
-    if (idx !== -1) {
-      const diff = next.includes(project.id) ? 1 : -1;
-      projects[idx] = { ...projects[idx], bookmarks: Math.max(0, projects[idx].bookmarks + diff) };
-      saveProjects(projects);
-      setProject(projects[idx]);
-    }
-    refreshData();
+    if (!currentUser) return;
+    const adding = !isSaved;
+    const newSaved = adding
+      ? [...(currentUser.savedProjects || []), project.id]
+      : (currentUser.savedProjects || []).filter(id => id !== project.id);
+    await updateUser(currentUser.id, { savedProjects: newSaved });
+    await updateProject(project.id, {
+      bookmarks: Math.max(0, (project.bookmarks || 0) + (adding ? 1 : -1)),
+    });
   };
 
   const filled = project.membersAccepted?.length || 1;
 
   return (
-    <div
-      className={`card project-card card-enter ${animClass || ''}`}
-      style={style}
-      onClick={() => openPanel(project)}
-    >
+    <div className="card project-card card-enter" onClick={() => openPanel(project)}>
       <div className="project-card-header">
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
           <StatusBadge status={project.status} />
@@ -79,17 +59,13 @@ export default function ProjectCard({ project: initProject, currentUser, setCurr
 
       <div className="project-card-footer">
         <button
-          className={`btn btn-ghost btn-sm`}
+          className="btn btn-ghost btn-sm"
           onClick={toggleSave}
           style={{ color: isSaved ? 'var(--maize)' : 'var(--text3)', fontSize: '1rem' }}
-          title={isSaved ? 'Unsave' : 'Save'}
         >
           {isSaved ? '★ Saved' : '☆ Save'}
         </button>
-        <button
-          className="btn btn-primary btn-sm"
-          onClick={(e) => { e.stopPropagation(); openPanel(project); }}
-        >
+        <button className="btn btn-primary btn-sm" onClick={(e) => { e.stopPropagation(); openPanel(project); }}>
           Apply →
         </button>
       </div>

@@ -1,21 +1,33 @@
 import { useState } from 'react';
-import { getUsers, saveCurrentUser, checkPassword } from '../utils/storage';
+import { loginUser } from '../utils/storage';
 
-export default function Login({ navigate, setCurrentUser }) {
+export default function Login({ navigate }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault();
     setError('');
-    const users = getUsers();
-    const user = users.find(u => u.email.toLowerCase() === email.toLowerCase());
-    if (!user) { setError('No account found with that email.'); return; }
-    if (!checkPassword(password, user.passwordEncoded)) { setError('Incorrect password.'); return; }
-    saveCurrentUser(user);
-    setCurrentUser(user);
-    navigate('home');
+    setLoading(true);
+    try {
+      await loginUser(email, password);
+      navigate('home');
+    } catch (err) {
+      const msg = err.message || '';
+      if (msg.includes('Invalid login credentials') || msg.includes('invalid_credentials')) {
+        setError('No account found with that email or password.');
+      } else if (msg.includes('Email not confirmed')) {
+        setError('Please confirm your email address before logging in.');
+      } else if (msg.includes('Too many requests')) {
+        setError('Too many attempts. Please wait a moment and try again.');
+      } else {
+        setError('Login failed. Please try again.');
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -30,26 +42,21 @@ export default function Login({ navigate, setCurrentUser }) {
           <div className="form-group">
             <label>UMD Email</label>
             <input className="input" type="email" value={email} onChange={e => setEmail(e.target.value)}
-              placeholder="you@umd.edu" required />
+              placeholder="you@umd.edu" required autoFocus />
           </div>
           <div className="form-group">
             <label>Password</label>
             <input className="input" type="password" value={password} onChange={e => setPassword(e.target.value)}
               placeholder="••••••••" required />
           </div>
-          <button className="btn btn-primary w-full" type="submit" style={{ width: '100%', marginTop: '0.5rem' }}>
-            Sign In
+          <button className="btn btn-primary w-full" type="submit" disabled={loading} style={{ width: '100%', marginTop: '0.5rem' }}>
+            {loading ? 'Signing in...' : 'Sign In'}
           </button>
         </form>
 
         <div className="auth-link">
           Don't have an account?{' '}
           <button onClick={() => navigate('signup')}>Sign up</button>
-        </div>
-
-        {/* Demo hint */}
-        <div style={{ marginTop: '1rem', padding: '0.75rem', background: 'var(--bg3)', borderRadius: 'var(--radius-sm)', fontSize: '0.78rem', color: 'var(--text3)' }}>
-          <strong>Demo:</strong> alexchen@umd.edu / password123
         </div>
       </div>
     </div>

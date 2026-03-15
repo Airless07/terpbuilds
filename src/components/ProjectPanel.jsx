@@ -1,12 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
-import {
-  getProjects, saveProjects, getCurrentUser, saveCurrentUser,
-  updateProjectInStorage, addNotification, timeAgo, generateId
-} from '../utils/storage';
+import { updateProject, updateUser, addNotification, timeAgo, generateId } from '../utils/storage';
 
-export default function ProjectPanel({ project: initProject, onClose, onViewFull, currentUser, setCurrentUser, refreshData }) {
+export default function ProjectPanel({ project: initProject, onClose, onViewFull, currentUser, setCurrentUser }) {
   const [project, setProject] = useState(initProject);
-  const [open, setOpen] = useState(false);
   const [comment, setComment] = useState('');
   const [applied, setApplied] = useState(false);
   const [applyMsg, setApplyMsg] = useState('');
@@ -14,7 +10,15 @@ export default function ProjectPanel({ project: initProject, onClose, onViewFull
   const panelRef = useRef();
 
   useEffect(() => {
-    setTimeout(() => setOpen(true), 10);
+    setProject(initProject);
+    if (currentUser) {
+      const alreadyApplied = initProject.applicants?.some(a => a.userId === currentUser.id);
+      const alreadyMember = initProject.membersAccepted?.includes(currentUser.id);
+      setApplied(alreadyApplied || alreadyMember);
+    }
+  }, [initProject, currentUser]);
+
+  useEffect(() => {
     const handler = (e) => {
       if (panelRef.current && !panelRef.current.contains(e.target)) onClose();
     };
@@ -27,86 +31,57 @@ export default function ProjectPanel({ project: initProject, onClose, onViewFull
     };
   }, []);
 
-  useEffect(() => {
-    const fresh = getProjects().find(p => p.id === project.id);
-    if (fresh) setProject(fresh);
-    if (currentUser) {
-      const alreadyApplied = project.applicants?.some(a => a.userId === currentUser.id);
-      const alreadyMember = project.membersAccepted?.includes(currentUser.id);
-      setApplied(alreadyApplied || alreadyMember);
-    }
-  }, [currentUser]);
+  const save = async (updated) => {
+    setProject(updated);
+    await updateProject(updated.id, updated);
+  };
 
-  const submitApply = () => {
+  const submitApply = async () => {
     if (!currentUser) return;
-    const projects = getProjects();
-    const idx = projects.findIndex(p => p.id === project.id);
-    if (idx === -1) return;
-    const alreadyApplied = projects[idx].applicants.some(a => a.userId === currentUser.id);
+    const alreadyApplied = project.applicants?.some(a => a.userId === currentUser.id);
     if (alreadyApplied) return;
-
-    projects[idx].applicants.push({
-      userId: currentUser.id, name: currentUser.displayName,
-      message: applyMsg, status: 'pending'
-    });
-    saveProjects(projects);
-    setProject(projects[idx]);
+    const app = { userId: currentUser.id, name: currentUser.displayName, message: applyMsg, status: 'pending' };
+    await save({ ...project, applicants: [...(project.applicants || []), app] });
     setApplied(true);
     setShowApply(false);
-    addNotification(projects[idx].ownerId, {
+    await addNotification(project.ownerId, {
       type: 'application',
-      text: `${currentUser.displayName} applied to "${projects[idx].title}"`,
+      text: `${currentUser.displayName} applied to "${project.title}"`,
       page: 'profile'
     });
 
-    // EmailJS — notify project owner of new application
     if (typeof emailjs !== 'undefined') {
       emailjs.send('service_2iwvvge', 'template_d0jmsfa', {
-        owner_name: projects[idx].ownerName,
-        project_title: projects[idx].title,
+        owner_name: project.ownerName,
+        project_title: project.title,
         applicant_name: currentUser.displayName,
         message: applyMsg,
-        to_email: projects[idx].contact,
+        to_email: project.contact,
       }).catch(err => console.warn('EmailJS error:', err));
     }
-
-    refreshData();
   };
 
-  const addComment = () => {
+  const addComment = async () => {
     if (!currentUser || !comment.trim()) return;
     const newComment = {
       id: generateId(), userId: currentUser.id, userName: currentUser.displayName,
       text: comment.trim(), timestamp: new Date().toISOString()
     };
-    const projects = getProjects();
-    const idx = projects.findIndex(p => p.id === project.id);
-    if (idx === -1) return;
-    projects[idx].comments.push(newComment);
-    saveProjects(projects);
-    setProject(projects[idx]);
+    await save({ ...project, comments: [...(project.comments || []), newComment] });
     setComment('');
-    refreshData();
   };
 
-  const toggleSave = () => {
-    const cu = getCurrentUser();
-    if (!cu) return;
-    const saved = cu.savedProjects || [];
-    const next = saved.includes(project.id) ? saved.filter(id => id !== project.id) : [...saved, project.id];
-    const updated = { ...cu, savedProjects: next };
-    saveCurrentUser(updated);
-    setCurrentUser(updated);
-
-    const projects = getProjects();
-    const idx = projects.findIndex(p => p.id === project.id);
-    if (idx !== -1) {
-      const diff = next.includes(project.id) ? 1 : -1;
-      projects[idx] = { ...projects[idx], bookmarks: Math.max(0, projects[idx].bookmarks + diff) };
-      saveProjects(projects);
-      setProject(projects[idx]);
-    }
-    refreshData();
+  const toggleSave = async () => {
+    if (!currentUser) return;
+    const isSaved = currentUser.savedProjects?.includes(project.id);
+    const newSaved = isSaved
+      ? (currentUser.savedProjects || []).filter(id => id !== project.id)
+      : [...(currentUser.savedProjects || []), project.id];
+    const updatedUser = { ...currentUser, savedProjects: newSaved };
+    setCurrentUser(updatedUser);
+    await updateUser(currentUser.id, { savedProjects: newSaved });
+    const diff = !isSaved ? 1 : -1;
+    await save({ ...project, bookmarks: Math.max(0, (project.bookmarks || 0) + diff) });
   };
 
   const isSaved = currentUser?.savedProjects?.includes(project.id);

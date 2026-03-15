@@ -1,78 +1,69 @@
-import { useState, useEffect } from 'react';
-import {
-  getProjects, saveProjects, getCurrentUser, saveCurrentUser,
-  updateProjectInStorage, addNotification, timeAgo, generateId, getUserById, getUsers
-} from '../utils/storage';
+import { useState } from 'react';
+import { updateProject, updateUser, addNotification, timeAgo, generateId } from '../utils/storage';
 import ProjectRoom from './ProjectRoom';
 import UserPopover from './UserPopover';
 
-export default function ProjectPage({ project: initProject, setProject, onBack, currentUser, setCurrentUser, navigate, refreshData, users }) {
+export default function ProjectPage({ project: initProject, setProject, onBack, currentUser, setCurrentUser, navigate, users, projects }) {
   const [project, setLocalProject] = useState(initProject);
   const [comment, setComment] = useState('');
   const [annText, setAnnText] = useState('');
   const [updateText, setUpdateText] = useState('');
   const [applyMsg, setApplyMsg] = useState('');
   const [showApplyForm, setShowApplyForm] = useState(false);
-  const [popover, setPopover] = useState(null); // { user, x, y }
+  const [popover, setPopover] = useState(null);
 
-  useEffect(() => {
-    const fresh = getProjects().find(p => p.id === project.id);
-    if (fresh) { setLocalProject(fresh); setProject(fresh); }
-  }, []);
-
-  const save = (updated) => {
-    updateProjectInStorage(updated);
+  const save = async (updated) => {
     setLocalProject(updated);
     setProject(updated);
-    refreshData();
+    await updateProject(updated.id, updated);
   };
 
   const isOwner = currentUser?.id === project.ownerId;
   const isMember = project.membersAccepted?.includes(currentUser?.id) || isOwner;
   const hasApplied = project.applicants?.some(a => a.userId === currentUser?.id);
 
-  const addComment = () => {
+  const addComment = async () => {
     if (!currentUser || !comment.trim()) return;
     const c = { id: generateId(), userId: currentUser.id, userName: currentUser.displayName, text: comment.trim(), timestamp: new Date().toISOString() };
-    save({ ...project, comments: [...(project.comments || []), c] });
+    await save({ ...project, comments: [...(project.comments || []), c] });
     setComment('');
   };
 
-  const pinAnnouncement = () => {
+  const pinAnnouncement = async () => {
     if (!isOwner || !annText.trim()) return;
     const a = { id: generateId(), text: annText.trim(), timestamp: new Date().toISOString() };
-    save({ ...project, announcements: [...(project.announcements || []), a] });
+    await save({ ...project, announcements: [...(project.announcements || []), a] });
     setAnnText('');
   };
 
-  const postUpdate = () => {
+  const postUpdate = async () => {
     if (!isOwner || !updateText.trim()) return;
     const u = { id: generateId(), text: updateText.trim(), timestamp: new Date().toISOString() };
-    save({ ...project, updates: [...(project.updates || []), u] });
+    await save({ ...project, updates: [...(project.updates || []), u] });
     setUpdateText('');
-    // Notify saved users
-    addNotification(project.ownerId, { type: 'projectUpdate', text: `You posted an update on "${project.title}"`, page: 'project-full' });
+    await addNotification(project.ownerId, { type: 'projectUpdate', text: `You posted an update on "${project.title}"`, page: 'project-full' });
   };
 
-  const applyToProject = () => {
+  const applyToProject = async () => {
     if (!currentUser || hasApplied) return;
     const app = { userId: currentUser.id, name: currentUser.displayName, message: applyMsg, status: 'pending' };
-    save({ ...project, applicants: [...(project.applicants || []), app] });
-    addNotification(project.ownerId, { type: 'application', text: `${currentUser.displayName} applied to "${project.title}"`, page: 'profile' });
+    await save({ ...project, applicants: [...(project.applicants || []), app] });
+    await addNotification(project.ownerId, { type: 'application', text: `${currentUser.displayName} applied to "${project.title}"`, page: 'profile' });
     setShowApplyForm(false);
     setApplyMsg('');
   };
 
-  const toggleSave = () => {
-    const cu = getCurrentUser();
-    if (!cu) return;
-    const saved = cu.savedProjects || [];
-    const next = saved.includes(project.id) ? saved.filter(id => id !== project.id) : [...saved, project.id];
-    const updated = { ...cu, savedProjects: next };
-    saveCurrentUser(updated);
-    setCurrentUser(updated);
-    const diff = next.includes(project.id) ? 1 : -1;
-    save({ ...project, bookmarks: Math.max(0, project.bookmarks + diff) });
+  const toggleSave = async () => {
+    if (!currentUser) return;
+    const isSaved = currentUser.savedProjects?.includes(project.id);
+    const newSaved = isSaved
+      ? (currentUser.savedProjects || []).filter(id => id !== project.id)
+      : [...(currentUser.savedProjects || []), project.id];
+    const updatedUser = { ...currentUser, savedProjects: newSaved };
+    setCurrentUser(updatedUser);
+    await updateUser(currentUser.id, { savedProjects: newSaved });
+    const diff = !isSaved ? 1 : -1;
+    await save({ ...project, bookmarks: Math.max(0, (project.bookmarks || 0) + diff) });
   };
 
   const openUserPopover = (uid, e) => {
@@ -80,7 +71,7 @@ export default function ProjectPage({ project: initProject, setProject, onBack, 
     if (u) setPopover({ user: u, x: e.clientX, y: e.clientY });
   };
 
-  const relatedProjects = getProjects()
+  const relatedProjects = (projects || [])
     .filter(p => p.id !== project.id && p.tags?.some(t => project.tags?.includes(t)))
     .slice(0, 3);
 
@@ -248,7 +239,7 @@ export default function ProjectPage({ project: initProject, setProject, onBack, 
               <h3 style={{ fontFamily: 'var(--font-mono)', marginBottom: '1rem', color: 'var(--maize)' }}>Related Projects</h3>
               {relatedProjects.map(rp => (
                 <div key={rp.id} style={{ padding: '0.75rem', background: 'var(--bg3)', borderRadius: 'var(--radius-sm)', marginBottom: '0.5rem', cursor: 'pointer' }}
-                  onClick={() => { const fresh = getProjects().find(p => p.id === rp.id) || rp; setLocalProject(fresh); setProject(fresh); }}>
+                  onClick={() => { setLocalProject(rp); setProject(rp); }}>
                   <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '0.9rem' }}>{rp.title}</div>
                   <div style={{ fontSize: '0.8rem', color: 'var(--text3)', marginTop: '0.2rem' }}>
                     {rp.tags?.slice(0, 3).join(' · ')}
@@ -332,7 +323,6 @@ export default function ProjectPage({ project: initProject, setProject, onBack, 
           currentUser={currentUser}
           setCurrentUser={setCurrentUser}
           navigate={navigate}
-          refreshData={refreshData}
         />
       )}
     </div>
