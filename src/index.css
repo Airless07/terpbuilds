@@ -167,6 +167,26 @@ a:hover { text-decoration: underline; }
 .logout-btn:hover { color: #E53E3E; border-color: #E53E3E; }
 @media (max-width: 768px) { .navbar { display: none; } }
 
+/* ── Social dropdown ───────────────────────────────────────── */
+.nav-social-wrap { position: relative; }
+.nav-social-dropdown {
+  position: absolute; top: calc(100% + 2px); left: 0;
+  min-width: 168px; background: var(--bg2);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  box-shadow: 0 8px 28px rgba(0,0,0,0.45); z-index: 200; overflow: hidden;
+  animation: slideDown 0.15s ease;
+}
+.nav-dropdown-item {
+  display: flex; align-items: center; width: 100%;
+  padding: 0.65rem 1rem; background: none; border: none;
+  text-align: left; cursor: pointer; color: var(--text2);
+  font-size: 0.875rem; font-family: var(--font-body); font-weight: 500;
+  transition: background var(--transition), color var(--transition);
+}
+.nav-dropdown-item:hover { background: var(--bg3); color: var(--text); }
+.nav-dropdown-item.active { color: var(--maize); font-weight: 600; }
+.user-avatar.avatar-active { box-shadow: 0 0 0 2px var(--maize); }
+
 /* ── Mobile Nav ────────────────────────────────────────────── */
 .mobile-nav {
   display: none; position: fixed; bottom: 0; left: 0; right: 0;

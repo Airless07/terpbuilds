@@ -27,7 +27,14 @@ export default function Projects({ projects, currentUser, setCurrentUser, openPa
     <div className="container" style={{ paddingTop: '2rem' }}>
       <div className="section-header">
         <h1 className="section-title">🔭 <span>Browse</span> Projects</h1>
-        <span style={{ color: 'var(--text3)', fontSize: '0.875rem' }}>{filtered.length} project{filtered.length !== 1 ? 's' : ''}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          {currentUser && (
+            <button className="btn btn-primary btn-sm" onClick={() => navigate('post-project')}>
+              + Post a Project
+            </button>
+          )}
+          <span style={{ color: 'var(--text3)', fontSize: '0.875rem' }}>{filtered.length} project{filtered.length !== 1 ? 's' : ''}</span>
+        </div>
       </div>
 
       {/* Search */}
