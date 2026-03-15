@@ -319,22 +319,46 @@ export const subscribeToConversation = (conversationKey, callback) => {
 
 export const applyToProject = async (projectId, applicantId, applicantName, message) => {
   console.log('[applyToProject] called:', { projectId, applicantId, applicantName, message });
+
+  // Guard: already applied
   const { data: existing } = await supabase.from('applications')
     .select('id').eq('project_id', projectId).eq('applicant_id', applicantId).maybeSingle();
   if (existing) { console.log('[applyToProject] already applied, skipping'); return; }
 
-  const { data: insertData, error } = await supabase.from('applications').insert({
+  // Insert application row
+  const { data: insertData, error: insertErr } = await supabase.from('applications').insert({
     project_id: projectId,
     applicant_id: applicantId,
     applicant_name: applicantName,
     message: message || '',
     status: 'pending',
   }).select();
-  console.log('[applyToProject] insert result:', insertData, 'error:', error);
-  if (error) { console.error('[applyToProject] error:', error); throw error; }
+  console.log('[applyToProject] insert result:', insertData, 'insertErr:', insertErr);
+  if (insertErr) { console.error('[applyToProject] insert error:', insertErr); throw insertErr; }
 
-  const { data: proj } = await supabase.from('projects').select('application_count').eq('id', projectId).single();
-  if (proj) await supabase.from('projects').update({ application_count: (proj.application_count || 0) + 1 }).eq('id', projectId);
+  // Fetch project to get current count, owner_id, and title
+  const { data: proj, error: projErr } = await supabase.from('projects')
+    .select('id, title, owner_id, application_count').eq('id', projectId).single();
+  console.log('[applyToProject] project fetch:', proj, 'projErr:', projErr);
+
+  if (proj) {
+    // Persist incremented application_count to Supabase
+    const newCount = (proj.application_count || 0) + 1;
+    const { error: countErr } = await supabase.from('projects')
+      .update({ application_count: newCount }).eq('id', projectId);
+    console.log('[applyToProject] application_count updated to', newCount, 'countErr:', countErr);
+    if (countErr) console.error('[applyToProject] count update error:', countErr);
+
+    // Notify project owner directly from here (owner_id comes from DB, not local state)
+    if (proj.owner_id && proj.owner_id !== applicantId) {
+      console.log('[applyToProject] notifying owner:', proj.owner_id);
+      await addNotification(proj.owner_id, {
+        type: 'application',
+        message: `${applicantName} applied to your project "${proj.title}"`,
+        page: 'projects',
+      });
+    }
+  }
 };
 
 export const checkApplication = async (projectId, applicantId) => {
@@ -343,17 +367,33 @@ export const checkApplication = async (projectId, applicantId) => {
   return data;
 };
 
-// Fetch all pending applications for projects owned by ownerId via inner join
+// Fetch all pending applications for projects owned by ownerId.
+// Uses two queries (no FK join required): owner's project IDs first, then filter applications.
 export const fetchApplicationsForOwner = async (ownerId) => {
   console.log('[fetchApplicationsForOwner] called for ownerId:', ownerId);
+
+  // Step 1: get all project IDs belonging to this owner
+  const { data: ownerProjects, error: projErr } = await supabase.from('projects')
+    .select('id, title').eq('owner_id', ownerId);
+  console.log('[fetchApplicationsForOwner] owner projects:', ownerProjects, 'projErr:', projErr);
+
+  const projectIds = (ownerProjects || []).map(p => p.id);
+  if (projectIds.length === 0) {
+    console.log('[fetchApplicationsForOwner] owner has no projects — returning []');
+    return [];
+  }
+
+  // Step 2: fetch pending applications for those projects
   const { data, error } = await supabase.from('applications')
-    .select('*, projects!inner(title, owner_id)')
-    .eq('status', 'pending');
-  console.log('[fetchApplicationsForOwner] raw result:', data, 'error:', error);
+    .select('*').eq('status', 'pending').in('project_id', projectIds);
+  console.log('[fetchApplicationsForOwner] applications result:', data, 'error:', error);
   if (error) { console.error('[fetchApplicationsForOwner] error:', error); return []; }
-  const filtered = (data || []).filter(a => a.projects?.owner_id === ownerId);
-  console.log('[fetchApplicationsForOwner] filtered for owner:', filtered);
-  return filtered;
+
+  // Attach project info (title) for display in the modal
+  const projectMap = Object.fromEntries((ownerProjects || []).map(p => [p.id, p]));
+  const result = (data || []).map(a => ({ ...a, projects: projectMap[a.project_id] }));
+  console.log('[fetchApplicationsForOwner] final result:', result);
+  return result;
 };
 
 export const updateApplication = async (applicationId, status) => {

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { updateProject, updateUser, addNotification, timeAgo, generateId, applyToProject, checkApplication } from '../utils/storage';
+import { updateProject, updateUser, timeAgo, generateId, applyToProject, checkApplication } from '../utils/storage';
 
 export default function ProjectPanel({ project: initProject, onClose, onViewFull, currentUser, setCurrentUser, users }) {
   const [project, setProject] = useState(initProject);
@@ -41,12 +41,8 @@ export default function ProjectPanel({ project: initProject, onClose, onViewFull
     const text = applyMsg.trim();
     setShowApply(false);
     setApplied(true);
+    // applyToProject handles: insert application, increment count, notify owner
     await applyToProject(project.id, currentUser.id, currentUser.displayName, text);
-    await addNotification(project.ownerId, {
-      type: 'application',
-      message: `${currentUser.displayName} applied to your project "${project.title}"`,
-      page: 'profile',
-    });
     if (typeof emailjs !== 'undefined') {
       const ownerEmail = users?.find(u => u.id === project.ownerId)?.email || project.contact;
       emailjs.send('service_2iwvvge', 'template_d0jmsfa', {

@@ -113,10 +113,7 @@ export default function Projects({ projects, currentUser, setCurrentUser, openPa
 
   const loadApplications = () => {
     if (!currentUser) return;
-    fetchApplicationsForOwner(currentUser.id).then(data => {
-      console.log('fetchApplicationsForOwner result:', data);
-      setApplications(data);
-    });
+    fetchApplicationsForOwner(currentUser.id).then(data => setApplications(data));
   };
 
   useEffect(() => {
@@ -188,7 +185,7 @@ export default function Projects({ projects, currentUser, setCurrentUser, openPa
               </button>
               <button
                 className="btn btn-outline btn-sm"
-                onClick={() => setShowAppsModal(true)}
+                onClick={() => { loadApplications(); setShowAppsModal(true); }}
               >
                 Applications
                 {pendingCount > 0 && (
