@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { dmKey, generateId, timeAgo, sendDM, markDMsRead, fetchUser } from '../utils/storage';
+import { dmKey, timeAgo, sendDM, markDMsRead, fetchUser, subscribeToConversation } from '../utils/storage';
 
 function NewMessageModal({ onClose, onOpen, currentUserId }) {
   const [userId, setUserId] = useState('');
@@ -61,10 +61,12 @@ function NewMessageModal({ onClose, onOpen, currentUserId }) {
 
 export default function Messages({ currentUser, navigate, dms, users }) {
   const [activeConvoKey, setActiveConvoKey] = useState(null);
+  const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [showNewModal, setShowNewModal] = useState(false);
   const endRef = useRef();
 
+  // Open DM from external navigation (Friends page "Message" button)
   useEffect(() => {
     if (!currentUser) { navigate('login'); return; }
     const openId = localStorage.getItem('tb_open_dm');
@@ -74,52 +76,47 @@ export default function Messages({ currentUser, navigate, dms, users }) {
     }
   }, [currentUser]);
 
-  // Match by conversation_key column (not id)
-  const activeConvo = dms.find(d => d.conversation_key === activeConvoKey);
-  const messages = activeConvo?.messages || [];
+  // Realtime subscription for active conversation messages
+  useEffect(() => {
+    if (!activeConvoKey) { setMessages([]); return; }
+    return subscribeToConversation(activeConvoKey, setMessages);
+  }, [activeConvoKey]);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  // Auto-scroll and mark as read when new messages arrive
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (activeConvoKey && messages.some(m => !m.read && m.sender_id !== currentUser?.id)) {
+      markDMsRead(activeConvoKey, currentUser.id);
+    }
+  }, [messages]);
 
+  // Build conversation list from dms prop (conversation summaries from App.jsx)
   const conversations = dms
-    .filter(d => d.participants?.includes(currentUser?.id))
     .map(d => {
-      const otherId = d.participants?.find(id => id !== currentUser.id);
-      const other = users.find(u => u.id === otherId);
+      const other = users.find(u => u.id === d.other_user_id);
       if (!other) return null;
-      const msgs = d.messages || [];
-      const unread = msgs.filter(m => !m.read && m.senderId !== currentUser.id).length;
-      return { key: d.conversation_key, other, lastMsg: msgs[msgs.length - 1], unread };
+      const lastMsg = d.messages?.[d.messages.length - 1];
+      return { key: d.conversation_key, other, lastMsg, unread: d.unread_count || 0 };
     })
     .filter(Boolean)
-    .sort((a, b) => new Date(b.lastMsg?.timestamp || 0) - new Date(a.lastMsg?.timestamp || 0));
+    .sort((a, b) => new Date(b.lastMsg?.created_at || 0) - new Date(a.lastMsg?.created_at || 0));
 
   const openConversation = async (otherUser) => {
     const key = dmKey(currentUser.id, otherUser.id);
     setActiveConvoKey(key);
-    const convo = dms.find(d => d.conversation_key === key);
-    if (convo && convo.messages?.some(m => !m.read && m.senderId !== currentUser.id)) {
-      await markDMsRead(key, currentUser.id, convo.messages || []);
-    }
+    // markDMsRead is called automatically via the messages useEffect
   };
 
   const sendMessage = async () => {
     if (!input.trim() || !activeConvoKey) return;
-    // UUIDs only contain hyphens, so splitting by '_' gives exactly the two user IDs
-    const parts = activeConvoKey.split('_');
-    const otherId = parts.find(id => id !== currentUser.id);
-    const participants = activeConvo?.participants || [currentUser.id, otherId];
-    const msg = {
-      id: generateId(), senderId: currentUser.id, senderName: currentUser.displayName,
-      text: input.trim(), timestamp: new Date().toISOString(), read: false,
-    };
+    const otherId = activeConvoKey.split('_').find(id => id !== currentUser.id);
+    const text = input.trim();
     setInput('');
-    await sendDM(activeConvoKey, participants, msg);
+    await sendDM(activeConvoKey, currentUser.id, otherId, text);
   };
 
-  // Resolve the other user even before any message exists (derive from convoKey)
-  const activeOtherId = activeConvo
-    ? activeConvo.participants?.find(id => id !== currentUser.id)
-    : activeConvoKey?.split('_').find(id => id !== currentUser?.id);
+  // Resolve other user for chat header — works even before first message
+  const activeOtherId = activeConvoKey?.split('_').find(id => id !== currentUser?.id);
   const activeOther = activeOtherId ? users.find(u => u.id === activeOtherId) : null;
 
   if (!currentUser) return null;
@@ -154,7 +151,7 @@ export default function Messages({ currentUser, navigate, dms, users }) {
                     <span className="convo-name">{c.other.displayName}</span>
                     {c.unread > 0 && <span className="badge" style={{ position: 'static' }}>{c.unread}</span>}
                   </div>
-                  <div className="convo-preview">{c.lastMsg?.text || 'No messages yet'}</div>
+                  <div className="convo-preview">{c.lastMsg?.content || 'No messages yet'}</div>
                 </div>
               </div>
             ))
@@ -189,18 +186,20 @@ export default function Messages({ currentUser, navigate, dms, users }) {
                   <div className="empty-state" style={{ flex: 1 }}><p>Start the conversation!</p></div>
                 )}
                 {messages.map(m => {
-                  const mine = m.senderId === currentUser.id;
+                  const mine = m.sender_id === currentUser.id;
+                  const senderUser = mine ? currentUser : users.find(u => u.id === m.sender_id);
+                  const initials = senderUser?.displayName?.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() || '?';
                   return (
                     <div key={m.id} className={`chat-msg ${mine ? 'mine' : ''}`}>
                       {!mine && (
                         <div className="user-avatar" style={{ width: 28, height: 28, fontSize: '0.7rem', flexShrink: 0 }}>
-                          {m.senderName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
+                          {initials}
                         </div>
                       )}
                       <div>
-                        {!mine && <div style={{ fontSize: '0.72rem', color: 'var(--text3)', marginBottom: '0.15rem' }}>{m.senderName}</div>}
-                        <div className="chat-bubble">{m.text}</div>
-                        <div className="chat-msg-meta">{timeAgo(m.timestamp)}</div>
+                        {!mine && <div style={{ fontSize: '0.72rem', color: 'var(--text3)', marginBottom: '0.15rem' }}>{senderUser?.displayName}</div>}
+                        <div className="chat-bubble">{m.content}</div>
+                        <div className="chat-msg-meta">{timeAgo(m.created_at)}</div>
                       </div>
                     </div>
                   );

@@ -70,9 +70,7 @@ export default function App() {
     const unsubNotifs = subscribeToNotifications(uid, setNotifications);
     const unsubDMs = subscribeToDMs(uid, (dmList) => {
       setDms(dmList);
-      const count = dmList.reduce((acc, convo) =>
-        acc + (convo.messages || []).filter(m => !m.read && m.senderId !== uid).length, 0
-      );
+      const count = dmList.reduce((acc, convo) => acc + (convo.unread_count || 0), 0);
       setUnreadMsgs(count);
     });
     return () => { unsubUser(); unsubNotifs(); unsubDMs(); };
