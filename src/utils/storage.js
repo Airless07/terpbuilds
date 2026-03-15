@@ -66,9 +66,7 @@ const mapUserUpdate = (data) => {
 
 // ── Auth (direct table operations — no Supabase Auth) ────────────────────
 export const signUpUser = async (email, password, profileData) => {
-  const uid = generateId();
   const row = {
-    id: uid,
     display_name: profileData.displayName,
     email,
     password,
@@ -89,7 +87,7 @@ export const signUpUser = async (email, password, profileData) => {
     console.error('signUpUser error:', error);
     throw error;
   }
-  localStorage.setItem('tb_uid', uid);
+  localStorage.setItem('tb_uid', data.id);
   return mapUser(data);
 };
 
