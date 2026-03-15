@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../firebase';
-import { dmKey, timeAgo, sendDM, markDMsRead, fetchUser, addNotification } from '../utils/storage';
+import { dmKey, timeAgo, sendDM, markDMsRead, fetchUser, addNotification, editMessage, deleteMessage } from '../utils/storage';
 
 function NewMessageModal({ onClose, onOpen, currentUserId }) {
   const [userId, setUserId] = useState('');
@@ -65,6 +65,16 @@ export default function Messages({ currentUser, navigate, dms, users }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [showNewModal, setShowNewModal] = useState(false);
+  const [hoveredMsgId, setHoveredMsgId] = useState(null);
+  const [editingId, setEditingId] = useState(null);
+  const [editContent, setEditContent] = useState('');
+  const [hoveredConvoKey, setHoveredConvoKey] = useState(null);
+  const [hiddenConvos, setHiddenConvos] = useState(() => {
+    try {
+      const uid = localStorage.getItem('tb_uid');
+      return new Set(JSON.parse(localStorage.getItem(`tb_hidden_${uid}`) || '[]'));
+    } catch { return new Set(); }
+  });
   const endRef = useRef();
 
   // Open DM from external navigation (Friends page "Message" button)
@@ -77,17 +87,15 @@ export default function Messages({ currentUser, navigate, dms, users }) {
     }
   }, [currentUser]);
 
-  // Realtime subscription for active conversation — payload-based for instant updates
+  // Realtime subscription for active conversation — INSERT + UPDATE for edits/deletes
   useEffect(() => {
     if (!activeConvoKey) { setMessages([]); return; }
 
-    // Initial fetch for this conversation
     supabase.from('messages').select('*')
       .eq('conversation_key', activeConvoKey)
       .order('created_at', { ascending: true })
       .then(({ data }) => setMessages(data || []));
 
-    // Subscribe: append new messages directly from payload (no re-fetch)
     const channel = supabase.channel(`convo-${activeConvoKey}`)
       .on('postgres_changes', {
         event: 'INSERT', schema: 'public', table: 'messages',
@@ -95,12 +103,18 @@ export default function Messages({ currentUser, navigate, dms, users }) {
       }, (payload) => {
         setMessages(prev => [...prev, payload.new]);
       })
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'messages',
+        filter: `conversation_key=eq.${activeConvoKey}`,
+      }, (payload) => {
+        setMessages(prev => prev.map(m => m.id === payload.new.id ? { ...m, ...payload.new } : m));
+      })
       .subscribe();
 
     return () => supabase.removeChannel(channel);
   }, [activeConvoKey]);
 
-  // Auto-scroll and mark as read when new messages arrive
+  // Auto-scroll and mark as read
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
     if (activeConvoKey && messages.some(m => !m.read && m.sender_id !== currentUser?.id)) {
@@ -108,7 +122,16 @@ export default function Messages({ currentUser, navigate, dms, users }) {
     }
   }, [messages]);
 
-  // Build conversation list from dms prop (conversation summaries from App.jsx)
+  const clearConvo = (key) => {
+    const next = new Set(hiddenConvos);
+    next.add(key);
+    setHiddenConvos(next);
+    const uid = localStorage.getItem('tb_uid');
+    if (uid) localStorage.setItem(`tb_hidden_${uid}`, JSON.stringify([...next]));
+    if (activeConvoKey === key) setActiveConvoKey(null);
+  };
+
+  // Build conversation list, filtering hidden ones
   const conversations = dms
     .map(d => {
       const other = users.find(u => u.id === d.other_user_id);
@@ -117,12 +140,13 @@ export default function Messages({ currentUser, navigate, dms, users }) {
       return { key: d.conversation_key, other, lastMsg, unread: d.unread_count || 0 };
     })
     .filter(Boolean)
+    .filter(c => !hiddenConvos.has(c.key))
     .sort((a, b) => new Date(b.lastMsg?.created_at || 0) - new Date(a.lastMsg?.created_at || 0));
 
-  const openConversation = async (otherUser) => {
+  const openConversation = (otherUser) => {
     const key = dmKey(currentUser.id, otherUser.id);
     setActiveConvoKey(key);
-    // markDMsRead is called automatically via the messages useEffect
+    setEditingId(null);
   };
 
   const sendMessage = async () => {
@@ -138,7 +162,17 @@ export default function Messages({ currentUser, navigate, dms, users }) {
     });
   };
 
-  // Resolve other user for chat header — works even before first message
+  const saveEdit = async (messageId) => {
+    if (!editContent.trim()) { setEditingId(null); return; }
+    await editMessage(messageId, editContent.trim());
+    setEditingId(null);
+    setEditContent('');
+  };
+
+  const handleDelete = async (messageId) => {
+    await deleteMessage(messageId);
+  };
+
   const activeOtherId = activeConvoKey?.split('_').find(id => id !== currentUser?.id);
   const activeOther = activeOtherId ? users.find(u => u.id === activeOtherId) : null;
 
@@ -160,24 +194,42 @@ export default function Messages({ currentUser, navigate, dms, users }) {
               <p>No conversations yet. Click "+ New Message" to start one.</p>
             </div>
           ) : (
-            conversations.map(c => (
-              <div
-                key={c.key}
-                className={`convo-item ${activeConvoKey === c.key ? 'active' : ''}`}
-                onClick={() => openConversation(c.other)}
-              >
-                <div className="user-avatar" style={{ width: 36, height: 36, fontSize: '0.8rem', flexShrink: 0 }}>
-                  {c.other.displayName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span className="convo-name">{c.other.displayName}</span>
-                    {c.unread > 0 && <span className="badge" style={{ position: 'static' }}>{c.unread}</span>}
+            conversations.map(c => {
+              const preview = c.lastMsg?.deleted ? 'Message deleted' : c.lastMsg?.content || 'No messages yet';
+              return (
+                <div
+                  key={c.key}
+                  className={`convo-item ${activeConvoKey === c.key ? 'active' : ''}`}
+                  onClick={() => openConversation(c.other)}
+                  onMouseEnter={() => setHoveredConvoKey(c.key)}
+                  onMouseLeave={() => setHoveredConvoKey(null)}
+                  style={{ position: 'relative' }}
+                >
+                  <div className="user-avatar" style={{ width: 36, height: 36, fontSize: '0.8rem', flexShrink: 0 }}>
+                    {c.other.displayName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
                   </div>
-                  <div className="convo-preview">{c.lastMsg?.content || 'No messages yet'}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span className="convo-name">{c.other.displayName}</span>
+                      {c.unread > 0 && <span className="badge" style={{ position: 'static' }}>{c.unread}</span>}
+                    </div>
+                    <div className="convo-preview" style={{ fontStyle: c.lastMsg?.deleted ? 'italic' : 'normal' }}>{preview}</div>
+                  </div>
+                  {hoveredConvoKey === c.key && (
+                    <button
+                      title="Clear from feed"
+                      onClick={(e) => { e.stopPropagation(); clearConvo(c.key); }}
+                      style={{
+                        position: 'absolute', top: '50%', right: 8, transform: 'translateY(-50%)',
+                        background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 4,
+                        padding: '2px 7px', fontSize: '0.8rem', color: 'var(--text3)',
+                        cursor: 'pointer', lineHeight: 1, zIndex: 1,
+                      }}
+                    >×</button>
+                  )}
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
 
@@ -190,6 +242,7 @@ export default function Messages({ currentUser, navigate, dms, users }) {
             </div>
           ) : (
             <>
+              {/* Chat header */}
               <div style={{ padding: '0.85rem 1rem', borderBottom: '1px solid var(--border)', background: 'var(--bg2)', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                 {activeOther && (
                   <>
@@ -204,25 +257,82 @@ export default function Messages({ currentUser, navigate, dms, users }) {
                 )}
               </div>
 
+              {/* Messages */}
               <div className="chat-messages">
                 {messages.length === 0 && (
                   <div className="empty-state" style={{ flex: 1 }}><p>Start the conversation!</p></div>
                 )}
                 {messages.map(m => {
                   const mine = m.sender_id === currentUser.id;
+
+                  // Deleted messages: centered italic line visible to both
+                  if (m.deleted) {
+                    return (
+                      <div key={m.id} style={{ textAlign: 'center', padding: '0.15rem 0' }}>
+                        <span style={{ color: 'var(--text3)', fontSize: '0.75rem', fontStyle: 'italic' }}>Message deleted</span>
+                      </div>
+                    );
+                  }
+
                   const senderUser = mine ? currentUser : users.find(u => u.id === m.sender_id);
                   const initials = senderUser?.displayName?.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() || '?';
+
                   return (
-                    <div key={m.id} className={`chat-msg ${mine ? 'mine' : ''}`}>
+                    <div
+                      key={m.id}
+                      className={`chat-msg ${mine ? 'mine' : ''}`}
+                      onMouseEnter={() => setHoveredMsgId(m.id)}
+                      onMouseLeave={() => setHoveredMsgId(null)}
+                    >
                       {!mine && (
                         <div className="user-avatar" style={{ width: 28, height: 28, fontSize: '0.7rem', flexShrink: 0 }}>
                           {initials}
                         </div>
                       )}
-                      <div>
+                      <div style={{ position: 'relative', maxWidth: '70%' }}>
                         {!mine && <div style={{ fontSize: '0.72rem', color: 'var(--text3)', marginBottom: '0.15rem' }}>{senderUser?.displayName}</div>}
-                        <div className="chat-bubble">{m.content}</div>
-                        <div className="chat-msg-meta">{timeAgo(m.created_at)}</div>
+
+                        {/* Edit/delete action bar for own messages */}
+                        {mine && hoveredMsgId === m.id && editingId !== m.id && (
+                          <div style={{
+                            position: 'absolute', top: -28, right: 0,
+                            display: 'flex', gap: 2,
+                            background: 'var(--bg2)', border: '1px solid var(--border)',
+                            borderRadius: 6, padding: '2px 4px', zIndex: 10,
+                          }}>
+                            <button
+                              onClick={() => { setEditingId(m.id); setEditContent(m.content); }}
+                              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 5px', fontSize: '0.8rem' }}
+                              title="Edit"
+                            >✏️</button>
+                            <button
+                              onClick={() => handleDelete(m.id)}
+                              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 5px', fontSize: '0.8rem' }}
+                              title="Delete"
+                            >🗑️</button>
+                          </div>
+                        )}
+
+                        {editingId === m.id ? (
+                          <input
+                            className="input"
+                            value={editContent}
+                            onChange={e => setEditContent(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') saveEdit(m.id);
+                              if (e.key === 'Escape') { setEditingId(null); setEditContent(''); }
+                            }}
+                            autoFocus
+                            style={{ minWidth: 160 }}
+                          />
+                        ) : (
+                          <div className="chat-bubble">{m.content}</div>
+                        )}
+
+                        <div className="chat-msg-meta">
+                          {timeAgo(m.created_at)}
+                          {m.edited && <span style={{ marginLeft: 4, fontSize: '0.6rem', color: 'var(--text3)' }}>edited</span>}
+                        </div>
                       </div>
                     </div>
                   );
@@ -230,6 +340,7 @@ export default function Messages({ currentUser, navigate, dms, users }) {
                 <div ref={endRef} />
               </div>
 
+              {/* Input row */}
               <div className="chat-input-row">
                 <input
                   className="input"

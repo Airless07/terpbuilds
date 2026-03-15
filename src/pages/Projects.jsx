@@ -1,12 +1,12 @@
 import { useState, useMemo, useEffect } from 'react';
 import { supabase } from '../firebase';
 import ProjectCard from '../components/ProjectCard';
-import { fetchApplicationsForProjects, updateApplication, addNotification } from '../utils/storage';
+import { fetchApplicationsForOwner, updateApplication, addNotification } from '../utils/storage';
 
 const CATEGORIES = ['All', 'ML', 'WebDev', 'Mobile', 'Robotics', 'Game Dev', 'Security', 'AI', 'Hardware', 'Design', 'Fullstack', 'Health', 'VR', 'Creative'];
 const STATUSES = ['All', 'Recruiting', 'Active', 'In Progress', 'Completed'];
 
-function DenyReasonModal({ applicant, project, onConfirm, onCancel }) {
+function DenyReasonModal({ applicant, projectTitle, onConfirm, onCancel }) {
   const [reason, setReason] = useState('');
   return (
     <div className="modal-overlay" onClick={onCancel}>
@@ -16,8 +16,8 @@ function DenyReasonModal({ applicant, project, onConfirm, onCancel }) {
           <button className="close-btn" onClick={onCancel}>✕</button>
         </div>
         <p style={{ fontSize: '0.875rem', color: 'var(--text2)', marginBottom: '1rem' }}>
-          Declining <strong>{applicant.applicant_name}</strong>'s application to <strong>{project.title}</strong>.
-          Optionally share a reason.
+          Declining <strong>{applicant.applicant_name}</strong>'s application to <strong>{projectTitle}</strong>.
+          Optionally share a reason — they'll see it in their notification.
         </p>
         <div className="form-group">
           <label>Reason (optional)</label>
@@ -25,7 +25,7 @@ function DenyReasonModal({ applicant, project, onConfirm, onCancel }) {
             className="input"
             value={reason}
             onChange={e => setReason(e.target.value)}
-            placeholder="e.g. We already filled this role..."
+            placeholder="e.g. We already filled this role, skills not matching..."
             style={{ minHeight: 80 }}
             autoFocus
           />
@@ -41,14 +41,13 @@ function DenyReasonModal({ applicant, project, onConfirm, onCancel }) {
 
 function ApplicationsModal({ applications, projects, users, onClose, onAccept, onDeny }) {
   const [denyTarget, setDenyTarget] = useState(null);
-  const pending = applications.filter(a => a.status === 'pending');
 
   if (denyTarget) {
     const proj = projects.find(p => p.id === denyTarget.project_id);
     return (
       <DenyReasonModal
         applicant={denyTarget}
-        project={proj || { title: 'this project' }}
+        projectTitle={denyTarget.projects?.title || proj?.title || 'this project'}
         onConfirm={(reason) => { onDeny(denyTarget, reason); setDenyTarget(null); }}
         onCancel={() => setDenyTarget(null)}
       />
@@ -57,18 +56,18 @@ function ApplicationsModal({ applications, projects, users, onClose, onAccept, o
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-box" style={{ maxWidth: 560, maxHeight: '80vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
+      <div className="modal-box" style={{ maxWidth: 580, maxHeight: '80vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
         <div className="modal-header">
-          <h3 className="modal-title">📩 Applications ({pending.length} pending)</h3>
+          <h3 className="modal-title">📩 Applications ({applications.length} pending)</h3>
           <button className="close-btn" onClick={onClose}>✕</button>
         </div>
-        {pending.length === 0 ? (
+        {applications.length === 0 ? (
           <div className="empty-state"><div className="empty-icon">📩</div><p>No pending applications.</p></div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-            {pending.map(a => {
-              const proj = projects.find(p => p.id === a.project_id);
-              const applicantUser = users?.find(u => u.id === a.user_id);
+            {applications.map(a => {
+              const applicantUser = users?.find(u => u.id === a.applicant_id);
+              const projectTitle = a.projects?.title || projects.find(p => p.id === a.project_id)?.title || '';
               return (
                 <div key={a.id} className="card" style={{ padding: '0.85rem' }}>
                   <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
@@ -77,7 +76,7 @@ function ApplicationsModal({ applications, projects, users, onClose, onAccept, o
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{a.applicant_name}</div>
-                      {proj && <div style={{ fontSize: '0.78rem', color: 'var(--maize)', marginBottom: '0.25rem' }}>→ {proj.title}</div>}
+                      {projectTitle && <div style={{ fontSize: '0.78rem', color: 'var(--maize)', marginBottom: '0.25rem' }}>→ {projectTitle}</div>}
                       {applicantUser?.skills?.length > 0 && (
                         <div className="tags" style={{ margin: '0.25rem 0' }}>
                           {applicantUser.skills.slice(0, 5).map(s => <span key={s} className="tag">{s}</span>)}
@@ -112,45 +111,49 @@ export default function Projects({ projects, currentUser, setCurrentUser, openPa
   const [showAppsModal, setShowAppsModal] = useState(false);
   const [applications, setApplications] = useState([]);
 
-  const myProjects = currentUser ? projects.filter(p => p.ownerId === currentUser.id) : [];
-  const myProjectIds = myProjects.map(p => p.id);
+  const loadApplications = () => {
+    if (!currentUser) return;
+    fetchApplicationsForOwner(currentUser.id).then(data => {
+      console.log('fetchApplicationsForOwner result:', data);
+      setApplications(data);
+    });
+  };
 
-  // Load + subscribe to applications for owner's projects
   useEffect(() => {
-    if (!currentUser || myProjectIds.length === 0) { setApplications([]); return; }
-    fetchApplicationsForProjects(myProjectIds).then(setApplications);
+    if (!currentUser) { setApplications([]); return; }
+    loadApplications();
 
-    const channel = supabase.channel(`apps-projects-page-${currentUser.id}`)
+    const channel = supabase.channel(`apps-projects-${currentUser.id}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'applications' }, () => {
-        fetchApplicationsForProjects(myProjectIds).then(setApplications);
+        loadApplications();
       })
       .subscribe();
     return () => supabase.removeChannel(channel);
-  }, [currentUser?.id, myProjectIds.join(',')]);
+  }, [currentUser?.id]);
 
-  const pendingCount = applications.filter(a => a.status === 'pending').length;
+  const pendingCount = applications.length; // already filtered to pending by fetchApplicationsForOwner
 
   const handleAccept = async (app) => {
     await updateApplication(app.id, 'accepted');
-    const proj = projects.find(p => p.id === app.project_id);
-    await addNotification(app.user_id, {
+    const projectTitle = app.projects?.title || projects.find(p => p.id === app.project_id)?.title || '';
+    await addNotification(app.applicant_id, {
       type: 'accepted',
-      message: `You were accepted to "${proj?.title}"!`,
+      message: `You were accepted to "${projectTitle}"!`,
       page: 'projects',
     });
-    setApplications(prev => prev.map(a => a.id === app.id ? { ...a, status: 'accepted' } : a));
+    setApplications(prev => prev.filter(a => a.id !== app.id));
   };
 
   const handleDeny = async (app, reason) => {
     await updateApplication(app.id, 'denied');
-    const proj = projects.find(p => p.id === app.project_id);
+    const projectTitle = app.projects?.title || projects.find(p => p.id === app.project_id)?.title || '';
     const reasonText = reason?.trim() || 'undisclosed';
-    await addNotification(app.user_id, {
+    await addNotification(app.applicant_id, {
       type: 'denied',
-      message: `Your application to "${proj?.title}" was not accepted. Reason: ${reasonText}`,
+      message: `Your application to "${projectTitle}" was not accepted. Reason: ${reasonText}`,
       page: 'projects',
     });
-    setApplications(prev => prev.map(a => a.id === app.id ? { ...a, status: 'denied' } : a));
+    setApplications(prev => prev.filter(a => a.id !== app.id));
   };
 
   const filtered = useMemo(() => {
@@ -186,7 +189,6 @@ export default function Projects({ projects, currentUser, setCurrentUser, openPa
               <button
                 className="btn btn-outline btn-sm"
                 onClick={() => setShowAppsModal(true)}
-                style={{ position: 'relative' }}
               >
                 Applications
                 {pendingCount > 0 && (
@@ -250,18 +252,12 @@ export default function Projects({ projects, currentUser, setCurrentUser, openPa
             {showMyProjects && !search && activeTag === 'All' && statusFilter === 'All'
               ? "You haven't posted any projects yet."
               : search || activeTag !== 'All' || statusFilter !== 'All'
-              ? 'No projects match your filters. Try adjusting your search or tags.'
+              ? 'No projects match your filters.'
               : 'No projects yet — be the first to post one!'}
           </p>
-          {(search || activeTag !== 'All' || statusFilter !== 'All' || showMyProjects) ? (
-            <button className="btn btn-primary btn-sm" onClick={() => { setSearch(''); setActiveTag('All'); setStatusFilter('All'); setShowMyProjects(false); }}>
-              Clear Filters
-            </button>
-          ) : (
-            <button className="btn btn-primary btn-sm" onClick={() => navigate('post-project')}>
-              Post a Project
-            </button>
-          )}
+          <button className="btn btn-primary btn-sm" onClick={() => { setSearch(''); setActiveTag('All'); setStatusFilter('All'); setShowMyProjects(false); }}>
+            Clear Filters
+          </button>
         </div>
       ) : (
         <div className="projects-grid">

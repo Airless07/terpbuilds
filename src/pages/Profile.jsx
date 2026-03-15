@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import TagInput from '../components/TagInput';
 import ProjectCard from '../components/ProjectCard';
-import { updateUser, updateProject, deleteProject as deleteProjectDB, addNotification, fetchApplicationsForProjects, updateApplication } from '../utils/storage';
+import { updateUser, updateProject, deleteProject as deleteProjectDB, addNotification, fetchApplicationsForOwner, updateApplication } from '../utils/storage';
 import { supabase } from '../firebase';
 
 function StarRating({ value, onChange }) {
@@ -29,7 +29,7 @@ function ApplicantsModal({ project, applications, users, onClose, onAction }) {
           <div className="empty-state"><div className="empty-icon">📩</div><p>No pending applicants.</p></div>
         ) : (
           pending.map(a => {
-            const applicantUser = users?.find(u => u.id === a.user_id);
+            const applicantUser = users?.find(u => u.id === a.applicant_id);
             return (
               <div key={a.id} className="card" style={{ marginBottom: '0.75rem' }}>
                 <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
@@ -131,16 +131,16 @@ export default function Profile({ currentUser, setCurrentUser, navigate, openPan
     : [];
 
   useEffect(() => {
-    if (!currentUser || myProjectIds.length === 0) { setApplications([]); return; }
-    fetchApplicationsForProjects(myProjectIds).then(setApplications);
+    if (!currentUser) { setApplications([]); return; }
+    fetchApplicationsForOwner(currentUser.id).then(setApplications);
 
-    const channel = supabase.channel(`applications-${currentUser.id}`)
+    const channel = supabase.channel(`applications-profile-${currentUser.id}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'applications' }, () => {
-        fetchApplicationsForProjects(myProjectIds).then(setApplications);
+        fetchApplicationsForOwner(currentUser.id).then(setApplications);
       })
       .subscribe();
     return () => supabase.removeChannel(channel);
-  }, [currentUser?.id, myProjectIds.join(',')]);
+  }, [currentUser?.id]);
 
   if (!currentUser) return null;
 
@@ -163,7 +163,7 @@ export default function Profile({ currentUser, setCurrentUser, navigate, openPan
     if (proj && proj.spotsRemaining > 0) {
       await updateProject(proj.id, { spotsRemaining: proj.spotsRemaining - 1 });
     }
-    await addNotification(applicant.user_id, {
+    await addNotification(applicant.applicant_id, {
       type: 'accepted',
       message: `You were accepted to "${project.title}"!`,
       page: 'projects',
@@ -174,7 +174,7 @@ export default function Profile({ currentUser, setCurrentUser, navigate, openPan
   const handleDeny = async (project, applicant, reason) => {
     await updateApplication(applicant.id, 'denied');
     const reasonText = reason?.trim() || 'undisclosed';
-    await addNotification(applicant.user_id, {
+    await addNotification(applicant.applicant_id, {
       type: 'denied',
       message: `Your application to "${project.title}" was not accepted. Reason: ${reasonText}`,
       page: 'projects',
