@@ -22,7 +22,7 @@ const VALID_USER_COLUMNS = new Set([
   'github_url', 'linkedin_url', 'site_url', 'trust_score',
 ]);
 
-const mapUser = (row) => {
+export const mapUser = (row) => {
   if (!row) return null;
   return {
     id: row.id,
@@ -70,7 +70,7 @@ const VALID_PROJECT_COLUMNS = new Set([
   'timeline', 'contact', 'owner_id', 'owner_name', 'bookmark_count', 'application_count',
 ]);
 
-const mapProject = (row) => {
+export const mapProject = (row) => {
   if (!row) return null;
   return {
     id: row.id,

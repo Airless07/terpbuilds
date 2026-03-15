@@ -1,9 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import {
-  fetchUser, logoutUser,
-  subscribeToProjects, subscribeToUsers, subscribeToCurrentUser,
-  subscribeToNotifications, subscribeToDMs,
-} from './utils/storage';
+import { supabase } from './firebase';
+import { fetchUser, logoutUser, mapProject, mapUser } from './utils/storage';
 import Navbar from './components/Navbar';
 import MobileNav from './components/MobileNav';
 import NotificationDropdown from './components/NotificationDropdown';
@@ -21,6 +18,23 @@ import ProjectPage from './components/ProjectPage';
 import Footer from './components/Footer';
 import './index.css';
 
+// Group flat message rows into per-conversation summaries
+const groupMessages = (msgs, uid) => {
+  const map = {};
+  for (const m of msgs) {
+    const k = m.conversation_key;
+    if (!map[k]) map[k] = {
+      conversation_key: k,
+      other_user_id: m.sender_id === uid ? m.receiver_id : m.sender_id,
+      messages: [],
+      unread_count: 0,
+    };
+    map[k].messages.push(m);
+    if (!m.read && m.sender_id !== uid) map[k].unread_count++;
+  }
+  return Object.values(map);
+};
+
 export default function App() {
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('tb_darkmode') !== 'false');
   const [currentPage, setCurrentPage] = useState('home');
@@ -37,14 +51,7 @@ export default function App() {
   const [fullProject, setFullProject] = useState(null);
   const [showNotifications, setShowNotifications] = useState(false);
 
-  // ── Global subscriptions (always active) ──────────────────────────────────
-  useEffect(() => {
-    const unsubProjects = subscribeToProjects(setProjects);
-    const unsubUsers = subscribeToUsers(setUsers);
-    return () => { unsubProjects(); unsubUsers(); };
-  }, []);
-
-  // ── Session restore from localStorage ────────────────────────────────────
+  // ── Session restore ────────────────────────────────────────────────────────
   useEffect(() => {
     const uid = localStorage.getItem('tb_uid');
     if (uid) {
@@ -57,7 +64,47 @@ export default function App() {
     }
   }, []);
 
-  // ── Per-user subscriptions (when logged in) ────────────────────────────────
+  // ── Global subscriptions: projects + users ─────────────────────────────────
+  useEffect(() => {
+    // Initial fetch
+    supabase.from('projects').select('*').order('created_at', { ascending: false })
+      .then(({ data }) => { if (data) setProjects(data.map(mapProject)); });
+    supabase.from('users').select('*')
+      .then(({ data }) => { if (data) setUsers(data.map(mapUser)); });
+
+    // Projects: update state directly from payload — no extra fetch
+    const projSub = supabase.channel('projects-realtime')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'projects' }, (payload) => {
+        setProjects(prev => [mapProject(payload.new), ...prev]);
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'projects' }, (payload) => {
+        setProjects(prev => prev.map(p => p.id === payload.new.id ? mapProject(payload.new) : p));
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'projects' }, (payload) => {
+        setProjects(prev => prev.filter(p => p.id !== payload.old.id));
+      })
+      .subscribe();
+
+    // Users: update state directly from payload
+    const usersSub = supabase.channel('users-realtime')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'users' }, (payload) => {
+        setUsers(prev => [...prev, mapUser(payload.new)]);
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'users' }, (payload) => {
+        setUsers(prev => prev.map(u => u.id === payload.new.id ? mapUser(payload.new) : u));
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'users' }, (payload) => {
+        setUsers(prev => prev.filter(u => u.id !== payload.old.id));
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(projSub);
+      supabase.removeChannel(usersSub);
+    };
+  }, []);
+
+  // ── Per-user subscriptions ─────────────────────────────────────────────────
   useEffect(() => {
     if (!currentUser?.id) {
       setNotifications([]);
@@ -66,14 +113,55 @@ export default function App() {
       return;
     }
     const uid = currentUser.id;
-    const unsubUser = subscribeToCurrentUser(uid, setCurrentUser);
-    const unsubNotifs = subscribeToNotifications(uid, setNotifications);
-    const unsubDMs = subscribeToDMs(uid, (dmList) => {
-      setDms(dmList);
-      const count = dmList.reduce((acc, convo) => acc + (convo.unread_count || 0), 0);
-      setUnreadMsgs(count);
-    });
-    return () => { unsubUser(); unsubNotifs(); unsubDMs(); };
+
+    // Initial fetch for user-specific data
+    supabase.from('notifications').select('items').eq('user_id', uid).single()
+      .then(({ data }) => setNotifications(data?.items || []));
+    supabase.from('messages').select('*')
+      .or(`sender_id.eq.${uid},receiver_id.eq.${uid}`)
+      .order('created_at', { ascending: true })
+      .then(({ data }) => {
+        if (data) {
+          const grouped = groupMessages(data, uid);
+          setDms(grouped);
+          setUnreadMsgs(grouped.reduce((acc, d) => acc + d.unread_count, 0));
+        }
+      });
+
+    // Current user profile updates
+    const profileSub = supabase.channel(`profile-${uid}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'users', filter: `id=eq.${uid}` }, (payload) => {
+        setCurrentUser(mapUser(payload.new));
+      })
+      .subscribe();
+
+    // Notifications: payload.new contains the full updated row with items array
+    const notifSub = supabase.channel(`notifs-${uid}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${uid}` }, (payload) => {
+        setNotifications(payload.new?.items || []);
+      })
+      .subscribe();
+
+    // DMs conversation list: re-fetch on any message change (grouping logic makes
+    // incremental updates complex; the active chat uses its own per-convo subscription)
+    const dmsSub = supabase.channel(`dms-${uid}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, async () => {
+        const { data } = await supabase.from('messages').select('*')
+          .or(`sender_id.eq.${uid},receiver_id.eq.${uid}`)
+          .order('created_at', { ascending: true });
+        if (data) {
+          const grouped = groupMessages(data, uid);
+          setDms(grouped);
+          setUnreadMsgs(grouped.reduce((acc, d) => acc + d.unread_count, 0));
+        }
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(profileSub);
+      supabase.removeChannel(notifSub);
+      supabase.removeChannel(dmsSub);
+    };
   }, [currentUser?.id]);
 
   // ── Keep panel/full-page views in sync with live project data ─────────────
@@ -97,10 +185,7 @@ export default function App() {
 
   const navigate = useCallback((page) => {
     const PROTECTED = ['friends', 'messages', 'post-project', 'profile'];
-    if (PROTECTED.includes(page) && !currentUser) {
-      setCurrentPage('login');
-      return;
-    }
+    if (PROTECTED.includes(page) && !currentUser) { setCurrentPage('login'); return; }
     setCurrentPage(page);
     setPanelProject(null);
     setFullProject(null);
@@ -130,7 +215,6 @@ export default function App() {
     setCurrentPage('home');
   }, []);
 
-  // refreshData is a no-op — Supabase subscriptions keep everything live
   const refreshData = useCallback(() => {}, []);
 
   const sharedProps = {
@@ -165,17 +249,10 @@ export default function App() {
         }
       }}
     >
-      <Navbar
-        {...sharedProps}
-        showNotifications={showNotifications}
-        setShowNotifications={setShowNotifications}
-      />
+      <Navbar {...sharedProps} showNotifications={showNotifications} setShowNotifications={setShowNotifications} />
 
       {showNotifications && (
-        <NotificationDropdown
-          {...sharedProps}
-          onClose={() => setShowNotifications(false)}
-        />
+        <NotificationDropdown {...sharedProps} onClose={() => setShowNotifications(false)} />
       )}
 
       {panelProject && (

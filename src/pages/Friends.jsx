@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
+import { supabase } from '../firebase';
 import {
   addNotification,
-  sendFriendRequest, acceptFriendRequest, declineFriendRequest,
-  removeFriendship, subscribeToFriendships,
+  sendFriendRequest, acceptFriendRequest, declineFriendRequest, removeFriendship,
 } from '../utils/storage';
 
 function UserCard({ user, currentUser, friendships, onAction, navigate }) {
@@ -61,7 +61,32 @@ export default function Friends({ currentUser, navigate, users }) {
 
   useEffect(() => {
     if (!currentUser?.id) return;
-    return subscribeToFriendships(currentUser.id, setFriendships);
+    const uid = currentUser.id;
+
+    // Initial fetch
+    supabase.from('friendships').select('*')
+      .or(`user_id.eq.${uid},friend_id.eq.${uid}`)
+      .then(({ data }) => setFriendships(data || []));
+
+    // Payload-based realtime — update state immediately without re-fetching
+    const channel = supabase.channel(`friendships-${uid}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'friendships' }, (payload) => {
+        const f = payload.new;
+        if (f.user_id !== uid && f.friend_id !== uid) return;
+        setFriendships(prev => [...prev, f]);
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'friendships' }, (payload) => {
+        const f = payload.new;
+        if (f.user_id !== uid && f.friend_id !== uid) return;
+        setFriendships(prev => prev.map(x => x.id === f.id ? f : x));
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'friendships' }, (payload) => {
+        const f = payload.old;
+        setFriendships(prev => prev.filter(x => x.id !== f.id));
+      })
+      .subscribe();
+
+    return () => supabase.removeChannel(channel);
   }, [currentUser?.id]);
 
   if (!currentUser) {

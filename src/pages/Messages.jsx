@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { dmKey, timeAgo, sendDM, markDMsRead, fetchUser, subscribeToConversation } from '../utils/storage';
+import { supabase } from '../firebase';
+import { dmKey, timeAgo, sendDM, markDMsRead, fetchUser } from '../utils/storage';
 
 function NewMessageModal({ onClose, onOpen, currentUserId }) {
   const [userId, setUserId] = useState('');
@@ -76,10 +77,27 @@ export default function Messages({ currentUser, navigate, dms, users }) {
     }
   }, [currentUser]);
 
-  // Realtime subscription for active conversation messages
+  // Realtime subscription for active conversation — payload-based for instant updates
   useEffect(() => {
     if (!activeConvoKey) { setMessages([]); return; }
-    return subscribeToConversation(activeConvoKey, setMessages);
+
+    // Initial fetch for this conversation
+    supabase.from('messages').select('*')
+      .eq('conversation_key', activeConvoKey)
+      .order('created_at', { ascending: true })
+      .then(({ data }) => setMessages(data || []));
+
+    // Subscribe: append new messages directly from payload (no re-fetch)
+    const channel = supabase.channel(`convo-${activeConvoKey}`)
+      .on('postgres_changes', {
+        event: 'INSERT', schema: 'public', table: 'messages',
+        filter: `conversation_key=eq.${activeConvoKey}`,
+      }, (payload) => {
+        setMessages(prev => [...prev, payload.new]);
+      })
+      .subscribe();
+
+    return () => supabase.removeChannel(channel);
   }, [activeConvoKey]);
 
   // Auto-scroll and mark as read when new messages arrive
