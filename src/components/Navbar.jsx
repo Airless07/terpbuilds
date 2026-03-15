@@ -8,13 +8,14 @@ export default function Navbar({
 }) {
   const [socialOpen, setSocialOpen] = useState(false);
   const socialRef = useRef();
+  const closeTimer = useRef(null);
 
   const unreadNotif = (notifications || []).filter(n => !n.read).length;
   const initials = currentUser
     ? currentUser.displayName.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)
     : '';
 
-  // Close social dropdown on outside click
+  // Close on outside click
   useEffect(() => {
     const handler = (e) => {
       if (socialRef.current && !socialRef.current.contains(e.target)) setSocialOpen(false);
@@ -22,6 +23,15 @@ export default function Navbar({
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
+
+  const handleSocialEnter = () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    setSocialOpen(true);
+  };
+
+  const handleSocialLeave = () => {
+    closeTimer.current = setTimeout(() => setSocialOpen(false), 150);
+  };
 
   const socialActive = currentPage === 'friends' || currentPage === 'messages';
 
@@ -44,8 +54,8 @@ export default function Navbar({
         <div
           ref={socialRef}
           className="nav-social-wrap"
-          onMouseEnter={() => setSocialOpen(true)}
-          onMouseLeave={() => setSocialOpen(false)}
+          onMouseEnter={handleSocialEnter}
+          onMouseLeave={handleSocialLeave}
         >
           <button
             className={`nav-tab ${socialActive ? 'active' : ''}`}

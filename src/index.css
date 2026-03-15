@@ -170,11 +170,12 @@ a:hover { text-decoration: underline; }
 /* ── Social dropdown ───────────────────────────────────────── */
 .nav-social-wrap { position: relative; }
 .nav-social-dropdown {
-  position: absolute; top: calc(100% + 2px); left: 0;
+  position: absolute; top: 100%; left: 0;
   min-width: 168px; background: var(--bg2);
   border: 1px solid var(--border); border-radius: var(--radius-sm);
   box-shadow: 0 8px 28px rgba(0,0,0,0.45); z-index: 200; overflow: hidden;
   animation: slideDown 0.15s ease;
+  padding-top: 6px;
 }
 .nav-dropdown-item {
   display: flex; align-items: center; width: 100%;
