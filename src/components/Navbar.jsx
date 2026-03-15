@@ -4,7 +4,7 @@ export default function Navbar({
   currentPage, navigate, currentUser, logout,
   darkMode, setDarkMode,
   showNotifications, setShowNotifications,
-  notifications, unreadMsgs,
+  notifications, unreadMsgs, pendingFriendReqs,
 }) {
   const [socialOpen, setSocialOpen] = useState(false);
   const socialRef = useRef();
@@ -34,6 +34,13 @@ export default function Navbar({
   };
 
   const socialActive = currentPage === 'friends' || currentPage === 'messages';
+  const socialBadge = (unreadMsgs || 0) + (pendingFriendReqs || 0);
+
+  const Badge = ({ count }) => count > 0 ? (
+    <span style={{ marginLeft: 5, background: '#E53E3E', color: '#fff', borderRadius: 10, padding: '0 5px', fontSize: '0.65rem', fontWeight: 700, lineHeight: 1 }}>
+      {count > 9 ? '9+' : count}
+    </span>
+  ) : null;
 
   return (
     <nav className="navbar">
@@ -62,6 +69,7 @@ export default function Navbar({
             onClick={() => setSocialOpen(o => !o)}
           >
             Social <span style={{ fontSize: '0.6rem', opacity: 0.7 }}>▾</span>
+            <Badge count={socialBadge} />
           </button>
           {socialOpen && (
             <div className="nav-social-dropdown">
@@ -69,18 +77,13 @@ export default function Navbar({
                 className={`nav-dropdown-item ${currentPage === 'friends' ? 'active' : ''}`}
                 onClick={() => { navigate('friends'); setSocialOpen(false); }}
               >
-                👥 Friends
+                👥 Friends <Badge count={pendingFriendReqs} />
               </button>
               <button
                 className={`nav-dropdown-item ${currentPage === 'messages' ? 'active' : ''}`}
                 onClick={() => { navigate('messages'); setSocialOpen(false); }}
               >
-                💬 Messages
-                {unreadMsgs > 0 && (
-                  <span style={{ marginLeft: 6, background: '#E53E3E', color: '#fff', borderRadius: 10, padding: '0 5px', fontSize: '0.65rem', fontWeight: 700 }}>
-                    {unreadMsgs}
-                  </span>
-                )}
+                💬 Messages <Badge count={unreadMsgs} />
               </button>
             </div>
           )}

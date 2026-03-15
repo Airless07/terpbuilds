@@ -46,6 +46,7 @@ export default function App() {
   const [notifications, setNotifications] = useState([]);
   const [dms, setDms] = useState([]);
   const [unreadMsgs, setUnreadMsgs] = useState(0);
+  const [pendingFriendReqs, setPendingFriendReqs] = useState(0);
 
   const [panelProject, setPanelProject] = useState(null);
   const [fullProject, setFullProject] = useState(null);
@@ -110,9 +111,13 @@ export default function App() {
       setNotifications([]);
       setDms([]);
       setUnreadMsgs(0);
+      setPendingFriendReqs(0);
       return;
     }
     const uid = currentUser.id;
+
+    const countPending = (rows) =>
+      (rows || []).filter(f => f.friend_id === uid && f.status === 'pending').length;
 
     // Initial fetch for user-specific data
     supabase.from('notifications').select('items').eq('user_id', uid).single()
@@ -127,6 +132,9 @@ export default function App() {
           setUnreadMsgs(grouped.reduce((acc, d) => acc + d.unread_count, 0));
         }
       });
+    supabase.from('friendships').select('*')
+      .or(`user_id.eq.${uid},friend_id.eq.${uid}`)
+      .then(({ data }) => setPendingFriendReqs(countPending(data)));
 
     // Current user profile updates
     const profileSub = supabase.channel(`profile-${uid}`)
@@ -157,10 +165,33 @@ export default function App() {
       })
       .subscribe();
 
+    // Friendships: update pending count from payload without re-fetching
+    const friendshipsSub = supabase.channel(`friendships-app-${uid}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'friendships' }, (payload) => {
+        if (payload.new.friend_id === uid && payload.new.status === 'pending') {
+          setPendingFriendReqs(prev => prev + 1);
+        }
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'friendships' }, (payload) => {
+        const f = payload.new;
+        if (f.friend_id !== uid) return;
+        // If a pending request was accepted/denied, decrement
+        if (payload.old.status === 'pending' && f.status !== 'pending') {
+          setPendingFriendReqs(prev => Math.max(0, prev - 1));
+        }
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'friendships' }, (payload) => {
+        if (payload.old.friend_id === uid && payload.old.status === 'pending') {
+          setPendingFriendReqs(prev => Math.max(0, prev - 1));
+        }
+      })
+      .subscribe();
+
     return () => {
       supabase.removeChannel(profileSub);
       supabase.removeChannel(notifSub);
       supabase.removeChannel(dmsSub);
+      supabase.removeChannel(friendshipsSub);
     };
   }, [currentUser?.id]);
 
@@ -222,7 +253,7 @@ export default function App() {
     currentPage, navigate,
     currentUser, setCurrentUser,
     projects, users,
-    notifications, dms, unreadMsgs,
+    notifications, dms, unreadMsgs, pendingFriendReqs,
     refreshData,
     openPanel, closePanel,
     openFullPage,
