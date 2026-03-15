@@ -14,46 +14,103 @@ export const timeAgo = (isoString) => {
   return `${Math.floor(diff / 604800)}w ago`;
 };
 
-// ── Auth ─────────────────────────────────────────────────────────────────────
+// ── Column mapping (DB snake_case ↔ app camelCase) ────────────────────────
+const mapUser = (row) => {
+  if (!row) return null;
+  return {
+    id: row.id,
+    displayName: row.display_name,
+    email: row.email,
+    skills: row.skills || [],
+    github: row.github_url || '',
+    linkedin: row.linkedin_url || '',
+    website: row.site_url || '',
+    trustScore: row.trust_score || 0,
+    ratings: row.ratings || [],
+    friends: row.friends || [],
+    friendRequests: row.friend_requests || { sent: [], received: [] },
+    following: row.following || [],
+    followers: row.followers || [],
+    savedProjects: row.saved_projects || [],
+    createdAt: row.created_at,
+  };
+};
+
+const mapUserUpdate = (data) => {
+  const colMap = {
+    displayName: 'display_name',
+    github: 'github_url',
+    linkedin: 'linkedin_url',
+    website: 'site_url',
+    trustScore: 'trust_score',
+    friendRequests: 'friend_requests',
+    savedProjects: 'saved_projects',
+    createdAt: 'created_at',
+  };
+  const result = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (key === 'id') continue;
+    result[colMap[key] || key] = value;
+  }
+  return result;
+};
+
+// ── Auth (direct table operations — no Supabase Auth) ────────────────────
 export const signUpUser = async (email, password, profileData) => {
-  const { data, error } = await supabase.auth.signUp({ email, password });
-  if (error) throw error;
-  const uid = data.user.id;
-  const { error: insertError } = await supabase.from('users').insert({
+  const uid = generateId();
+  const row = {
     id: uid,
-    displayName: profileData.displayName,
+    display_name: profileData.displayName,
     email,
+    password,
     skills: profileData.skills || [],
-    github: profileData.github || '',
-    linkedin: profileData.linkedin || '',
-    website: profileData.website || '',
-    trustScore: 0,
+    github_url: profileData.github || '',
+    linkedin_url: profileData.linkedin || '',
+    site_url: profileData.website || '',
+    trust_score: 0,
     ratings: [],
     friends: [],
-    friendRequests: { sent: [], received: [] },
+    friend_requests: { sent: [], received: [] },
     following: [],
     followers: [],
-    savedProjects: [],
-    createdAt: new Date().toISOString(),
-  });
-  if (insertError) throw insertError;
-  return uid;
+    saved_projects: [],
+  };
+  const { data, error } = await supabase.from('users').insert(row).select().single();
+  if (error) {
+    console.error('signUpUser error:', error);
+    throw error;
+  }
+  localStorage.setItem('tb_uid', uid);
+  return mapUser(data);
 };
 
 export const loginUser = async (email, password) => {
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
-  if (error) throw error;
+  const { data, error } = await supabase
+    .from('users')
+    .select('*')
+    .eq('email', email)
+    .eq('password', password)
+    .single();
+  if (error || !data) {
+    console.error('loginUser error:', error);
+    throw new Error('Invalid login credentials');
+  }
+  localStorage.setItem('tb_uid', data.id);
+  return mapUser(data);
 };
 
 export const logoutUser = async () => {
-  await supabase.auth.signOut();
+  localStorage.removeItem('tb_uid');
 };
 
 // ── Projects ─────────────────────────────────────────────────────────────────
 export const addProject = async (data) => {
   const { id, ...clean } = data;
   const { data: proj, error } = await supabase.from('projects').insert(clean).select().single();
-  if (error) throw error;
+  if (error) {
+    console.error('addProject error:', error);
+    throw error;
+  }
   return proj.id;
 };
 
@@ -69,14 +126,15 @@ export const deleteProject = async (projectId) => {
 
 // ── Users ────────────────────────────────────────────────────────────────────
 export const updateUser = async (userId, data) => {
-  const { id, ...clean } = data;
-  const { error } = await supabase.from('users').update(clean).eq('id', userId);
+  const mapped = mapUserUpdate(data);
+  const { error } = await supabase.from('users').update(mapped).eq('id', userId);
   if (error) console.error('updateUser error:', error);
 };
 
 export const fetchUser = async (userId) => {
-  const { data } = await supabase.from('users').select('*').eq('id', userId).single();
-  return data;
+  const { data, error } = await supabase.from('users').select('*').eq('id', userId).single();
+  if (error) console.error('fetchUser error:', error);
+  return mapUser(data);
 };
 
 // ── Notifications ─────────────────────────────────────────────────────────────
@@ -127,7 +185,9 @@ export const subscribeToProjects = (callback) => {
 };
 
 export const subscribeToUsers = (callback) => {
-  const fetch = () => supabase.from('users').select('*').then(({ data }) => { if (data) callback(data); });
+  const fetch = () => supabase.from('users').select('*').then(({ data }) => {
+    if (data) callback(data.map(mapUser));
+  });
   fetch();
   const channel = supabase.channel('users-all')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, fetch)
@@ -136,7 +196,9 @@ export const subscribeToUsers = (callback) => {
 };
 
 export const subscribeToCurrentUser = (userId, callback) => {
-  const fetch = () => supabase.from('users').select('*').eq('id', userId).single().then(({ data }) => { if (data) callback(data); });
+  const fetch = () => supabase.from('users').select('*').eq('id', userId).single().then(({ data }) => {
+    if (data) callback(mapUser(data));
+  });
   fetch();
   const channel = supabase.channel(`user-${userId}`)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'users', filter: `id=eq.${userId}` }, fetch)

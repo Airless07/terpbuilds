@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from './firebase';
 import {
   fetchUser, logoutUser,
   subscribeToProjects, subscribeToUsers, subscribeToCurrentUser,
@@ -45,19 +44,17 @@ export default function App() {
     return () => { unsubProjects(); unsubUsers(); };
   }, []);
 
-  // ── Supabase Auth state ───────────────────────────────────────────────────
+  // ── Session restore from localStorage ────────────────────────────────────
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (session?.user) {
-        const userData = await fetchUser(session.user.id);
+    const uid = localStorage.getItem('tb_uid');
+    if (uid) {
+      fetchUser(uid).then(userData => {
         if (userData) setCurrentUser(userData);
-        else setCurrentUser(null);
-      } else {
-        setCurrentUser(null);
-      }
+        setAuthLoading(false);
+      });
+    } else {
       setAuthLoading(false);
-    });
-    return () => subscription.unsubscribe();
+    }
   }, []);
 
   // ── Per-user subscriptions (when logged in) ────────────────────────────────

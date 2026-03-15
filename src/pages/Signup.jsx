@@ -2,7 +2,7 @@ import { useState } from 'react';
 import TagInput from '../components/TagInput';
 import { signUpUser } from '../utils/storage';
 
-export default function Signup({ navigate }) {
+export default function Signup({ navigate, setCurrentUser }) {
   const [form, setForm] = useState({
     displayName: '', email: '', password: '', confirm: '',
     github: '', linkedin: '', website: '',
@@ -21,26 +21,22 @@ export default function Signup({ navigate }) {
 
     setLoading(true);
     try {
-      await signUpUser(form.email, form.password, {
+      const user = await signUpUser(form.email, form.password, {
         displayName: form.displayName,
         skills,
         github: form.github,
         linkedin: form.linkedin,
         website: form.website,
       });
+      setCurrentUser(user);
       navigate('home');
     } catch (err) {
+      console.error('Signup error:', err);
       const msg = err.message || '';
-      if (msg.includes('already registered') || msg.includes('already been registered')) {
+      if (msg.includes('duplicate') || msg.includes('unique') || msg.includes('already exists')) {
         setError('An account with this email already exists. Please log in instead.');
-      } else if (msg.includes('invalid email') || msg.includes('valid email')) {
-        setError('Please enter a valid email address.');
-      } else if (msg.includes('password') && msg.includes('6')) {
-        setError('Password must be at least 6 characters.');
-      } else if (msg.includes('Email not confirmed')) {
-        setError('Account created! Please check your email to confirm your account, then sign in.');
       } else {
-        setError('Sign up failed. Please try again.');
+        setError(`Sign up failed: ${msg || 'Please try again.'}`);
       }
     } finally {
       setLoading(false);

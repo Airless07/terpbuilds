@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { loginUser } from '../utils/storage';
 
-export default function Login({ navigate }) {
+export default function Login({ navigate, setCurrentUser }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -12,19 +12,12 @@ export default function Login({ navigate }) {
     setError('');
     setLoading(true);
     try {
-      await loginUser(email, password);
+      const user = await loginUser(email, password);
+      setCurrentUser(user);
       navigate('home');
     } catch (err) {
-      const msg = err.message || '';
-      if (msg.includes('Invalid login credentials') || msg.includes('invalid_credentials')) {
-        setError('No account found with that email or password.');
-      } else if (msg.includes('Email not confirmed')) {
-        setError('Please confirm your email address before logging in.');
-      } else if (msg.includes('Too many requests')) {
-        setError('Too many attempts. Please wait a moment and try again.');
-      } else {
-        setError('Login failed. Please try again.');
-      }
+      console.error('Login error:', err);
+      setError('No account found with that email or password.');
     } finally {
       setLoading(false);
     }
