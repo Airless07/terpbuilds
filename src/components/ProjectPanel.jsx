@@ -44,7 +44,7 @@ export default function ProjectPanel({ project: initProject, onClose, onViewFull
     await applyToProject(project.id, currentUser.id, currentUser.displayName, text);
     await addNotification(project.ownerId, {
       type: 'application',
-      text: `${currentUser.displayName} applied to "${project.title}"`,
+      message: `${currentUser.displayName} applied to your project "${project.title}"`,
       page: 'profile',
     });
     if (typeof emailjs !== 'undefined') {

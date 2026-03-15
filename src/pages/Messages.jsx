@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../firebase';
-import { dmKey, timeAgo, sendDM, markDMsRead, fetchUser } from '../utils/storage';
+import { dmKey, timeAgo, sendDM, markDMsRead, fetchUser, addNotification } from '../utils/storage';
 
 function NewMessageModal({ onClose, onOpen, currentUserId }) {
   const [userId, setUserId] = useState('');
@@ -131,6 +131,11 @@ export default function Messages({ currentUser, navigate, dms, users }) {
     const text = input.trim();
     setInput('');
     await sendDM(activeConvoKey, currentUser.id, otherId, text);
+    await addNotification(otherId, {
+      type: 'message',
+      message: `${currentUser.displayName} sent you a message`,
+      page: 'messages',
+    });
   };
 
   // Resolve other user for chat header — works even before first message

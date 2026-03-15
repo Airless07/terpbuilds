@@ -114,11 +114,11 @@ export default function Friends({ currentUser, navigate, users }) {
     switch (action) {
       case 'addFriend':
         await sendFriendRequest(currentUser.id, targetUser.id);
-        await addNotification(targetUser.id, { type: 'friendRequest', text: `${currentUser.displayName} sent you a friend request.`, page: 'friends' });
+        await addNotification(targetUser.id, { type: 'friend_request', message: `${currentUser.displayName} sent you a friend request`, page: 'friends' });
         break;
       case 'acceptFriend':
         await acceptFriendRequest(targetUser.id, currentUser.id);
-        await addNotification(targetUser.id, { type: 'accepted', text: `${currentUser.displayName} accepted your friend request!`, page: 'friends' });
+        await addNotification(targetUser.id, { type: 'friend_accepted', message: `${currentUser.displayName} accepted your friend request`, page: 'friends' });
         break;
       case 'denyFriend':
         await declineFriendRequest(targetUser.id, currentUser.id);

@@ -110,6 +110,8 @@ export default function Profile({ currentUser, setCurrentUser, navigate, openPan
   const [applicantsModal, setApplicantsModal] = useState(null);
   const [rateModal, setRateModal] = useState(null);
   const [profileTab, setProfileTab] = useState('projects');
+  const [denyTarget, setDenyTarget] = useState(null); // { project, applicant }
+  const [denyReason, setDenyReason] = useState('');
   const [saved, setSaved] = useState(false);
   const [applications, setApplications] = useState([]);
 
@@ -155,22 +157,36 @@ export default function Profile({ currentUser, setCurrentUser, navigate, openPan
     await updateUser(currentUser.id, { displayName: form.displayName, github: form.github, linkedin: form.linkedin, website: form.website, skills });
   };
 
-  const handleApplicantAction = async (action, project, applicant) => {
-    await updateApplication(applicant.id, action === 'accept' ? 'accepted' : 'denied');
-    if (action === 'accept') {
-      const proj = projects.find(p => p.id === project.id);
-      if (proj && proj.spotsRemaining > 0) {
-        await updateProject(proj.id, { spotsRemaining: proj.spotsRemaining - 1 });
-      }
+  const handleAccept = async (project, applicant) => {
+    await updateApplication(applicant.id, 'accepted');
+    const proj = projects.find(p => p.id === project.id);
+    if (proj && proj.spotsRemaining > 0) {
+      await updateProject(proj.id, { spotsRemaining: proj.spotsRemaining - 1 });
     }
     await addNotification(applicant.user_id, {
-      type: action === 'accept' ? 'accepted' : 'denied',
-      text: action === 'accept'
-        ? `You were accepted to "${project.title}"!`
-        : `Your application to "${project.title}" was not accepted.`,
+      type: 'accepted',
+      message: `You were accepted to "${project.title}"!`,
       page: 'projects',
     });
     setApplicantsModal(null);
+  };
+
+  const handleDeny = async (project, applicant, reason) => {
+    await updateApplication(applicant.id, 'denied');
+    const reasonText = reason?.trim() || 'undisclosed';
+    await addNotification(applicant.user_id, {
+      type: 'denied',
+      message: `Your application to "${project.title}" was not accepted. Reason: ${reasonText}`,
+      page: 'projects',
+    });
+    setDenyTarget(null);
+    setDenyReason('');
+    setApplicantsModal(null);
+  };
+
+  const handleApplicantAction = (action, project, applicant) => {
+    if (action === 'accept') return handleAccept(project, applicant);
+    if (action === 'deny') { setDenyTarget({ project, applicant }); }
   };
 
   const handleRate = async (targetUserId, score, review, projectId) => {
@@ -400,7 +416,7 @@ export default function Profile({ currentUser, setCurrentUser, navigate, openPan
       )}
 
       {/* Modals */}
-      {applicantsModal && (
+      {applicantsModal && !denyTarget && (
         <ApplicantsModal
           project={applicantsModal}
           applications={applications}
@@ -408,6 +424,36 @@ export default function Profile({ currentUser, setCurrentUser, navigate, openPan
           onClose={() => setApplicantsModal(null)}
           onAction={handleApplicantAction}
         />
+      )}
+      {denyTarget && (
+        <div className="modal-overlay" onClick={() => { setDenyTarget(null); setDenyReason(''); }}>
+          <div className="modal-box" style={{ maxWidth: 420 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">Decline Application</h3>
+              <button className="close-btn" onClick={() => { setDenyTarget(null); setDenyReason(''); }}>✕</button>
+            </div>
+            <p style={{ fontSize: '0.875rem', color: 'var(--text2)', marginBottom: '1rem' }}>
+              Declining <strong>{denyTarget.applicant.applicant_name}</strong>'s application to <strong>{denyTarget.project.title}</strong>.
+              Optionally share a reason — they'll see it in their notification.
+            </p>
+            <div className="form-group">
+              <label>Reason (optional)</label>
+              <textarea
+                className="input"
+                value={denyReason}
+                onChange={e => setDenyReason(e.target.value)}
+                placeholder="e.g. We already filled this role, or skills not matching..."
+                style={{ minHeight: 80 }}
+              />
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem' }}>
+              <button className="btn btn-danger btn-sm" onClick={() => handleDeny(denyTarget.project, denyTarget.applicant, denyReason)}>
+                Confirm Decline
+              </button>
+              <button className="btn btn-ghost btn-sm" onClick={() => { setDenyTarget(null); setDenyReason(''); }}>Cancel</button>
+            </div>
+          </div>
+        </div>
       )}
       {rateModal && (
         <RateTeammatesModal
