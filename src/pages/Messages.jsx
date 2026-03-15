@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { supabase } from '../firebase';
 import { dmKey, timeAgo, sendDM, markDMsRead, fetchUser, addNotification, editMessage, deleteMessage } from '../utils/storage';
 
@@ -69,11 +69,13 @@ export default function Messages({ currentUser, navigate, dms, users }) {
   const [editingId, setEditingId] = useState(null);
   const [editContent, setEditContent] = useState('');
   const [hoveredConvoKey, setHoveredConvoKey] = useState(null);
-  const [hiddenConvos, setHiddenConvos] = useState(() => {
+  // clearedConvos: { [conversationKey]: ISO timestamp of when it was cleared }
+  // Conversation reappears if a new message arrives AFTER the cleared timestamp
+  const [clearedConvos, setClearedConvos] = useState(() => {
     try {
       const uid = localStorage.getItem('tb_uid');
-      return new Set(JSON.parse(localStorage.getItem(`tb_hidden_${uid}`) || '[]'));
-    } catch { return new Set(); }
+      return JSON.parse(localStorage.getItem(`tb_cleared_${uid}`) || '{}');
+    } catch { return {}; }
   });
   const endRef = useRef();
 
@@ -123,16 +125,16 @@ export default function Messages({ currentUser, navigate, dms, users }) {
   }, [messages]);
 
   const clearConvo = (key) => {
-    const next = new Set(hiddenConvos);
-    next.add(key);
-    setHiddenConvos(next);
+    const now = new Date().toISOString();
+    const next = { ...clearedConvos, [key]: now };
+    setClearedConvos(next);
     const uid = localStorage.getItem('tb_uid');
-    if (uid) localStorage.setItem(`tb_hidden_${uid}`, JSON.stringify([...next]));
+    if (uid) localStorage.setItem(`tb_cleared_${uid}`, JSON.stringify(next));
     if (activeConvoKey === key) setActiveConvoKey(null);
   };
 
-  // Build conversation list, filtering hidden ones
-  const conversations = dms
+  // Build conversation list from dms prop, filtering cleared ones unless new messages arrived
+  const conversations = useMemo(() => dms
     .map(d => {
       const other = users.find(u => u.id === d.other_user_id);
       if (!other) return null;
@@ -140,8 +142,32 @@ export default function Messages({ currentUser, navigate, dms, users }) {
       return { key: d.conversation_key, other, lastMsg, unread: d.unread_count || 0 };
     })
     .filter(Boolean)
-    .filter(c => !hiddenConvos.has(c.key))
-    .sort((a, b) => new Date(b.lastMsg?.created_at || 0) - new Date(a.lastMsg?.created_at || 0));
+    .filter(c => {
+      const clearedAt = clearedConvos[c.key];
+      if (!clearedAt) return true;
+      // Reappear if a new message arrived after this conversation was cleared
+      const lastMsgTime = c.lastMsg?.created_at;
+      return lastMsgTime && new Date(lastMsgTime) > new Date(clearedAt);
+    })
+    .sort((a, b) => new Date(b.lastMsg?.created_at || 0) - new Date(a.lastMsg?.created_at || 0)),
+  [dms, users, clearedConvos]);
+
+  const activeOtherId = activeConvoKey?.split('_').find(id => id !== currentUser?.id);
+  const activeOther = activeOtherId ? users.find(u => u.id === activeOtherId) : null;
+
+  // Include the active conversation in the sidebar immediately, even before dms updates
+  const conversationsWithActive = useMemo(() => {
+    if (!activeConvoKey || !activeOther) return conversations;
+    const alreadyListed = conversations.some(c => c.key === activeConvoKey);
+    if (alreadyListed) return conversations;
+    const pendingEntry = {
+      key: activeConvoKey,
+      other: activeOther,
+      lastMsg: messages[messages.length - 1] || null,
+      unread: 0,
+    };
+    return [pendingEntry, ...conversations];
+  }, [conversations, activeConvoKey, activeOther, messages]);
 
   const openConversation = (otherUser) => {
     const key = dmKey(currentUser.id, otherUser.id);
@@ -155,6 +181,7 @@ export default function Messages({ currentUser, navigate, dms, users }) {
     const text = input.trim();
     setInput('');
     await sendDM(activeConvoKey, currentUser.id, otherId, text);
+    console.log('[Messages] sending notification to', otherId);
     await addNotification(otherId, {
       type: 'message',
       message: `${currentUser.displayName} sent you a message`,
@@ -163,18 +190,20 @@ export default function Messages({ currentUser, navigate, dms, users }) {
   };
 
   const saveEdit = async (messageId) => {
-    if (!editContent.trim()) { setEditingId(null); return; }
-    await editMessage(messageId, editContent.trim());
+    const trimmed = editContent.trim();
+    if (!trimmed) { setEditingId(null); return; }
+    // Optimistic local update immediately
+    setMessages(prev => prev.map(m => m.id === messageId ? { ...m, content: trimmed, edited: true } : m));
     setEditingId(null);
     setEditContent('');
+    await editMessage(messageId, trimmed);
   };
 
   const handleDelete = async (messageId) => {
+    // Optimistic local update immediately
+    setMessages(prev => prev.map(m => m.id === messageId ? { ...m, deleted: true, content: '[deleted]' } : m));
     await deleteMessage(messageId);
   };
-
-  const activeOtherId = activeConvoKey?.split('_').find(id => id !== currentUser?.id);
-  const activeOther = activeOtherId ? users.find(u => u.id === activeOtherId) : null;
 
   if (!currentUser) return null;
 
@@ -188,13 +217,13 @@ export default function Messages({ currentUser, navigate, dms, users }) {
       <div className="messages-layout">
         {/* Conversation list */}
         <div className="convo-list">
-          {conversations.length === 0 ? (
+          {conversationsWithActive.length === 0 ? (
             <div className="empty-state" style={{ padding: '2rem 1rem' }}>
               <div className="empty-icon">💬</div>
               <p>No conversations yet. Click "+ New Message" to start one.</p>
             </div>
           ) : (
-            conversations.map(c => {
+            conversationsWithActive.map(c => {
               const preview = c.lastMsg?.deleted ? 'Message deleted' : c.lastMsg?.content || 'No messages yet';
               return (
                 <div
@@ -289,7 +318,7 @@ export default function Messages({ currentUser, navigate, dms, users }) {
                           {initials}
                         </div>
                       )}
-                      <div style={{ position: 'relative', maxWidth: '70%' }}>
+                      <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
                         {!mine && <div style={{ fontSize: '0.72rem', color: 'var(--text3)', marginBottom: '0.15rem' }}>{senderUser?.displayName}</div>}
 
                         {/* Edit/delete action bar for own messages */}

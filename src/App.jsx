@@ -143,10 +143,13 @@ export default function App() {
       })
       .subscribe();
 
-    // Notifications: payload.new contains the full updated row with items array
+    // Notifications: re-fetch on any change (JSONB column may not be in payload.new reliably)
     const notifSub = supabase.channel(`notifs-${uid}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${uid}` }, (payload) => {
-        setNotifications(payload.new?.items || []);
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${uid}` }, async (payload) => {
+        console.log('[App] notification realtime event:', payload.eventType, payload);
+        const { data, error } = await supabase.from('notifications').select('items').eq('user_id', uid).single();
+        console.log('[App] notification re-fetch:', data, error);
+        setNotifications(data?.items || []);
       })
       .subscribe();
 

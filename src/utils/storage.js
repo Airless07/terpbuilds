@@ -208,15 +208,22 @@ export const fetchUser = async (userId) => {
 
 // ── Notifications ──────────────────────────────────────────────────────────────
 export const addNotification = async (userId, notif) => {
-  if (!userId) { console.error('addNotification: missing userId'); return; }
+  console.log('[addNotification] called with userId:', userId, 'notif:', notif);
+  if (!userId) { console.error('[addNotification] MISSING userId — aborting'); return; }
   const item = { ...notif, id: generateId(), read: false, timestamp: new Date().toISOString() };
+  console.log('[addNotification] item to insert:', item);
+
   const { data: existing, error: fetchErr } = await supabase.from('notifications')
     .select('items').eq('user_id', userId).single();
-  if (fetchErr && fetchErr.code !== 'PGRST116') console.error('addNotification fetch error:', fetchErr);
+  console.log('[addNotification] existing row:', existing, 'fetchErr:', fetchErr);
+  if (fetchErr && fetchErr.code !== 'PGRST116') console.error('[addNotification] fetch error:', fetchErr);
+
   const items = [...(existing?.items || []), item];
-  const { error: upsertErr } = await supabase.from('notifications')
-    .upsert({ user_id: userId, items }, { onConflict: 'user_id' });
-  if (upsertErr) console.error('addNotification upsert error:', upsertErr);
+  const { data: upsertData, error: upsertErr } = await supabase.from('notifications')
+    .upsert({ user_id: userId, items }, { onConflict: 'user_id' })
+    .select();
+  console.log('[addNotification] upsert result:', upsertData, 'upsertErr:', upsertErr);
+  if (upsertErr) console.error('[addNotification] upsert error:', upsertErr);
 };
 
 export const markNotifRead = async (userId, notifId, allItems) => {
@@ -230,7 +237,10 @@ export const markAllNotifsRead = async (userId, allItems) => {
 };
 
 // ── Messages (one row per message) ───────────────────────────────────────────
-// Table columns: id (auto uuid), conversation_key, sender_id, receiver_id, content, read, created_at
+// Table columns: id (auto uuid), conversation_key, sender_id, receiver_id, content, read, created_at, edited (bool), deleted (bool)
+// Run in Supabase SQL editor if these columns don't exist:
+//   ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited boolean DEFAULT false;
+//   ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted boolean DEFAULT false;
 
 export const sendDM = async (conversationKey, senderId, receiverId, content) => {
   const { error } = await supabase.from('messages').insert({
@@ -308,18 +318,20 @@ export const subscribeToConversation = (conversationKey, callback) => {
 // Table columns: id (uuid auto), project_id, applicant_id, applicant_name, message, status, created_at
 
 export const applyToProject = async (projectId, applicantId, applicantName, message) => {
+  console.log('[applyToProject] called:', { projectId, applicantId, applicantName, message });
   const { data: existing } = await supabase.from('applications')
     .select('id').eq('project_id', projectId).eq('applicant_id', applicantId).maybeSingle();
-  if (existing) { console.log('applyToProject: already applied'); return; }
+  if (existing) { console.log('[applyToProject] already applied, skipping'); return; }
 
-  const { error } = await supabase.from('applications').insert({
+  const { data: insertData, error } = await supabase.from('applications').insert({
     project_id: projectId,
     applicant_id: applicantId,
     applicant_name: applicantName,
     message: message || '',
     status: 'pending',
-  });
-  if (error) { console.error('applyToProject error:', error); throw error; }
+  }).select();
+  console.log('[applyToProject] insert result:', insertData, 'error:', error);
+  if (error) { console.error('[applyToProject] error:', error); throw error; }
 
   const { data: proj } = await supabase.from('projects').select('application_count').eq('id', projectId).single();
   if (proj) await supabase.from('projects').update({ application_count: (proj.application_count || 0) + 1 }).eq('id', projectId);
@@ -331,13 +343,17 @@ export const checkApplication = async (projectId, applicantId) => {
   return data;
 };
 
-// Fetch all pending applications for projects owned by ownerId via join
+// Fetch all pending applications for projects owned by ownerId via inner join
 export const fetchApplicationsForOwner = async (ownerId) => {
+  console.log('[fetchApplicationsForOwner] called for ownerId:', ownerId);
   const { data, error } = await supabase.from('applications')
-    .select('*, projects(title, owner_id)')
+    .select('*, projects!inner(title, owner_id)')
     .eq('status', 'pending');
-  if (error) { console.error('fetchApplicationsForOwner error:', error); return []; }
-  return (data || []).filter(a => a.projects?.owner_id === ownerId);
+  console.log('[fetchApplicationsForOwner] raw result:', data, 'error:', error);
+  if (error) { console.error('[fetchApplicationsForOwner] error:', error); return []; }
+  const filtered = (data || []).filter(a => a.projects?.owner_id === ownerId);
+  console.log('[fetchApplicationsForOwner] filtered for owner:', filtered);
+  return filtered;
 };
 
 export const updateApplication = async (applicationId, status) => {
@@ -347,17 +363,23 @@ export const updateApplication = async (applicationId, status) => {
 
 // ── Messages: edit and soft-delete ────────────────────────────────────────────
 export const editMessage = async (messageId, content) => {
-  const { error } = await supabase.from('messages')
+  console.log('[editMessage] id:', messageId, 'content:', content);
+  const { data, error } = await supabase.from('messages')
     .update({ content, edited: true })
-    .eq('id', messageId);
-  if (error) console.error('editMessage error:', error);
+    .eq('id', messageId)
+    .select();
+  console.log('[editMessage] result:', data, 'error:', error);
+  if (error) console.error('[editMessage] error:', error);
 };
 
 export const deleteMessage = async (messageId) => {
-  const { error } = await supabase.from('messages')
+  console.log('[deleteMessage] id:', messageId);
+  const { data, error } = await supabase.from('messages')
     .update({ content: '[deleted]', deleted: true })
-    .eq('id', messageId);
-  if (error) console.error('deleteMessage error:', error);
+    .eq('id', messageId)
+    .select();
+  console.log('[deleteMessage] result:', data, 'error:', error);
+  if (error) console.error('[deleteMessage] error:', error);
 };
 
 // ── Friendships ────────────────────────────────────────────────────────────────
