@@ -299,6 +299,45 @@ export const subscribeToConversation = (conversationKey, callback) => {
   return () => supabase.removeChannel(channel);
 };
 
+// ── Applications ──────────────────────────────────────────────────────────────
+// Table columns: id (uuid auto), project_id, user_id, applicant_name, message, status, created_at
+
+export const applyToProject = async (projectId, userId, applicantName, message) => {
+  const { data: existing } = await supabase.from('applications')
+    .select('id').eq('project_id', projectId).eq('user_id', userId).maybeSingle();
+  if (existing) return;
+
+  const { error } = await supabase.from('applications').insert({
+    project_id: projectId,
+    user_id: userId,
+    applicant_name: applicantName,
+    message: message || '',
+    status: 'pending',
+  });
+  if (error) { console.error('applyToProject error:', error); throw error; }
+
+  const { data: proj } = await supabase.from('projects').select('application_count').eq('id', projectId).single();
+  if (proj) await supabase.from('projects').update({ application_count: (proj.application_count || 0) + 1 }).eq('id', projectId);
+};
+
+export const checkApplication = async (projectId, userId) => {
+  const { data } = await supabase.from('applications')
+    .select('id, status').eq('project_id', projectId).eq('user_id', userId).maybeSingle();
+  return data;
+};
+
+export const fetchApplicationsForProjects = async (projectIds) => {
+  if (!projectIds.length) return [];
+  const { data, error } = await supabase.from('applications').select('*').in('project_id', projectIds);
+  if (error) { console.error('fetchApplicationsForProjects error:', error); return []; }
+  return data || [];
+};
+
+export const updateApplication = async (applicationId, status) => {
+  const { error } = await supabase.from('applications').update({ status }).eq('id', applicationId);
+  if (error) console.error('updateApplication error:', error);
+};
+
 // ── Friendships ────────────────────────────────────────────────────────────────
 export const sendFriendRequest = async (senderId, receiverId) => {
   // Prevent duplicates

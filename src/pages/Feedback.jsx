@@ -19,7 +19,7 @@ export default function Feedback() {
         window.EMAILJS_TEMPLATE_FEEDBACK || 'template_d0jmsfa',
         {
           subject: subject,
-          feedback: feedback,
+          message: feedback,
           to_email: 'mohammou@umich.edu',
         }
       );

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import { updateProject, updateUser, addNotification, timeAgo, generateId } from '../utils/storage';
+import { updateProject, updateUser, addNotification, timeAgo, generateId, applyToProject, checkApplication } from '../utils/storage';
 
-export default function ProjectPanel({ project: initProject, onClose, onViewFull, currentUser, setCurrentUser }) {
+export default function ProjectPanel({ project: initProject, onClose, onViewFull, currentUser, setCurrentUser, users }) {
   const [project, setProject] = useState(initProject);
   const [comment, setComment] = useState('');
   const [applied, setApplied] = useState(false);
@@ -11,11 +11,11 @@ export default function ProjectPanel({ project: initProject, onClose, onViewFull
 
   useEffect(() => {
     setProject(initProject);
-    if (currentUser) {
-      const alreadyApplied = initProject.applicants?.some(a => a.userId === currentUser.id);
-      const alreadyMember = initProject.membersAccepted?.includes(currentUser.id);
-      setApplied(alreadyApplied || alreadyMember);
-    }
+    setApplied(false);
+    if (!currentUser) return;
+    const alreadyMember = initProject.membersAccepted?.includes(currentUser.id);
+    if (alreadyMember) { setApplied(true); return; }
+    checkApplication(initProject.id, currentUser.id).then(app => { if (app) setApplied(true); });
   }, [initProject, currentUser]);
 
   useEffect(() => {
@@ -38,25 +38,23 @@ export default function ProjectPanel({ project: initProject, onClose, onViewFull
 
   const submitApply = async () => {
     if (!currentUser) return;
-    const alreadyApplied = project.applicants?.some(a => a.userId === currentUser.id);
-    if (alreadyApplied) return;
-    const app = { userId: currentUser.id, name: currentUser.displayName, message: applyMsg, status: 'pending' };
-    await save({ ...project, applicants: [...(project.applicants || []), app] });
-    setApplied(true);
+    const text = applyMsg.trim();
     setShowApply(false);
+    setApplied(true);
+    await applyToProject(project.id, currentUser.id, currentUser.displayName, text);
     await addNotification(project.ownerId, {
       type: 'application',
       text: `${currentUser.displayName} applied to "${project.title}"`,
-      page: 'profile'
+      page: 'profile',
     });
-
     if (typeof emailjs !== 'undefined') {
+      const ownerEmail = users?.find(u => u.id === project.ownerId)?.email || project.contact;
       emailjs.send('service_2iwvvge', 'template_d0jmsfa', {
         owner_name: project.ownerName,
         project_title: project.title,
         applicant_name: currentUser.displayName,
-        message: applyMsg,
-        to_email: project.contact,
+        message: text,
+        to_email: ownerEmail,
       }).catch(err => console.warn('EmailJS error:', err));
     }
   };
@@ -97,7 +95,7 @@ export default function ProjectPanel({ project: initProject, onClose, onViewFull
           <div>
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
               <span className={`status-badge status-${project.status.replace(' ', '-')}`}>{project.status}</span>
-              {(project.bookmarks + project.applicants.length) >= 10 &&
+              {(project.bookmarks + project.applicationCount) >= 10 &&
                 <span className="status-badge status-Trending">🔥 Trending</span>}
             </div>
             <h2 style={{ fontFamily: 'var(--font-mono)', fontSize: '1.15rem', lineHeight: 1.3 }}>{project.title}</h2>

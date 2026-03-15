@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import TagInput from '../components/TagInput';
 import ProjectCard from '../components/ProjectCard';
-import { updateUser, updateProject, deleteProject as deleteProjectDB, addNotification } from '../utils/storage';
+import { updateUser, updateProject, deleteProject as deleteProjectDB, addNotification, fetchApplicationsForProjects, updateApplication } from '../utils/storage';
+import { supabase } from '../firebase';
 
 function StarRating({ value, onChange }) {
   const [hover, setHover] = useState(0);
@@ -15,7 +16,8 @@ function StarRating({ value, onChange }) {
   );
 }
 
-function ApplicantsModal({ project, onClose, onAction }) {
+function ApplicantsModal({ project, applications, users, onClose, onAction }) {
+  const pending = applications.filter(a => a.project_id === project.id && a.status === 'pending');
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-box" onClick={e => e.stopPropagation()}>
@@ -23,26 +25,34 @@ function ApplicantsModal({ project, onClose, onAction }) {
           <h3 className="modal-title">Applicants — {project.title}</h3>
           <button className="close-btn" onClick={onClose}>✕</button>
         </div>
-        {project.applicants?.filter(a => a.status === 'pending').length === 0 ? (
+        {pending.length === 0 ? (
           <div className="empty-state"><div className="empty-icon">📩</div><p>No pending applicants.</p></div>
         ) : (
-          project.applicants.filter(a => a.status === 'pending').map(a => (
-            <div key={a.userId} className="card" style={{ marginBottom: '0.75rem' }}>
-              <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
-                <div className="user-avatar" style={{ width: 36, height: 36, fontSize: '0.8rem', flexShrink: 0 }}>
-                  {a.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{a.name}</div>
-                  {a.message && <div style={{ fontSize: '0.85rem', color: 'var(--text2)', margin: '0.35rem 0', fontStyle: 'italic' }}>"{a.message}"</div>}
-                </div>
-                <div style={{ display: 'flex', gap: '0.4rem', flexShrink: 0 }}>
-                  <button className="btn btn-success btn-sm" onClick={() => onAction('accept', project, a)}>Accept</button>
-                  <button className="btn btn-danger btn-sm" onClick={() => onAction('deny', project, a)}>Deny</button>
+          pending.map(a => {
+            const applicantUser = users?.find(u => u.id === a.user_id);
+            return (
+              <div key={a.id} className="card" style={{ marginBottom: '0.75rem' }}>
+                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
+                  <div className="user-avatar" style={{ width: 36, height: 36, fontSize: '0.8rem', flexShrink: 0 }}>
+                    {a.applicant_name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{a.applicant_name}</div>
+                    {applicantUser?.skills?.length > 0 && (
+                      <div className="tags" style={{ margin: '0.3rem 0' }}>
+                        {applicantUser.skills.slice(0, 5).map(s => <span key={s} className="tag">{s}</span>)}
+                      </div>
+                    )}
+                    {a.message && <div style={{ fontSize: '0.85rem', color: 'var(--text2)', margin: '0.25rem 0', fontStyle: 'italic' }}>"{a.message}"</div>}
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.4rem', flexShrink: 0 }}>
+                    <button className="btn btn-success btn-sm" onClick={() => onAction('accept', project, a)}>Accept</button>
+                    <button className="btn btn-danger btn-sm" onClick={() => onAction('deny', project, a)}>Deny</button>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
     </div>
@@ -101,6 +111,7 @@ export default function Profile({ currentUser, setCurrentUser, navigate, openPan
   const [rateModal, setRateModal] = useState(null);
   const [profileTab, setProfileTab] = useState('projects');
   const [saved, setSaved] = useState(false);
+  const [applications, setApplications] = useState([]);
 
   useEffect(() => {
     if (!currentUser) { navigate('login'); return; }
@@ -112,6 +123,22 @@ export default function Profile({ currentUser, setCurrentUser, navigate, openPan
     });
     setSkills(currentUser.skills || []);
   }, [currentUser]);
+
+  const myProjectIds = currentUser
+    ? projects.filter(p => p.ownerId === currentUser.id).map(p => p.id)
+    : [];
+
+  useEffect(() => {
+    if (!currentUser || myProjectIds.length === 0) { setApplications([]); return; }
+    fetchApplicationsForProjects(myProjectIds).then(setApplications);
+
+    const channel = supabase.channel(`applications-${currentUser.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'applications' }, () => {
+        fetchApplicationsForProjects(myProjectIds).then(setApplications);
+      })
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [currentUser?.id, myProjectIds.join(',')]);
 
   if (!currentUser) return null;
 
@@ -129,23 +156,19 @@ export default function Profile({ currentUser, setCurrentUser, navigate, openPan
   };
 
   const handleApplicantAction = async (action, project, applicant) => {
-    const proj = projects.find(p => p.id === project.id);
-    if (!proj) return;
-
-    const updatedApplicants = proj.applicants.map(a =>
-      a.userId === applicant.userId ? { ...a, status: action === 'accept' ? 'accepted' : 'denied' } : a
-    );
-    const updatedMembers = action === 'accept' && !proj.membersAccepted.includes(applicant.userId)
-      ? [...proj.membersAccepted, applicant.userId]
-      : proj.membersAccepted;
-
-    await updateProject(proj.id, { applicants: updatedApplicants, membersAccepted: updatedMembers });
-    await addNotification(applicant.userId, {
+    await updateApplication(applicant.id, action === 'accept' ? 'accepted' : 'denied');
+    if (action === 'accept') {
+      const proj = projects.find(p => p.id === project.id);
+      if (proj && proj.spotsRemaining > 0) {
+        await updateProject(proj.id, { spotsRemaining: proj.spotsRemaining - 1 });
+      }
+    }
+    await addNotification(applicant.user_id, {
       type: action === 'accept' ? 'accepted' : 'denied',
       text: action === 'accept'
         ? `You were accepted to "${project.title}"!`
         : `Your application to "${project.title}" was not accepted.`,
-      page: 'projects'
+      page: 'projects',
     });
     setApplicantsModal(null);
   };
@@ -314,7 +337,7 @@ export default function Profile({ currentUser, setCurrentUser, navigate, openPan
                     openPanel={openPanel} animClass="card-enter" />
                   <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
                     <button className="btn btn-outline btn-sm" onClick={() => setApplicantsModal(p)}>
-                      👥 Applicants ({p.applicants?.filter(a => a.status === 'pending').length || 0})
+                      👥 Applicants ({applications.filter(a => a.project_id === p.id && a.status === 'pending').length})
                     </button>
                     <button className="btn btn-danger btn-sm" onClick={() => handleDeleteProject(p.id)}>🗑 Delete</button>
                   </div>
@@ -380,6 +403,8 @@ export default function Profile({ currentUser, setCurrentUser, navigate, openPan
       {applicantsModal && (
         <ApplicantsModal
           project={applicantsModal}
+          applications={applications}
+          users={users}
           onClose={() => setApplicantsModal(null)}
           onAction={handleApplicantAction}
         />
