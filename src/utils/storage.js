@@ -15,6 +15,13 @@ export const timeAgo = (isoString) => {
 };
 
 // ── Column mapping (DB snake_case ↔ app camelCase) ────────────────────────
+// Valid users table columns: id, display_name, email, password, skills,
+// github_url, linkedin_url, site_url, trust_score, created_at
+const VALID_USER_COLUMNS = new Set([
+  'display_name', 'email', 'password', 'skills',
+  'github_url', 'linkedin_url', 'site_url', 'trust_score',
+]);
+
 const mapUser = (row) => {
   if (!row) return null;
   return {
@@ -26,12 +33,13 @@ const mapUser = (row) => {
     linkedin: row.linkedin_url || '',
     website: row.site_url || '',
     trustScore: row.trust_score || 0,
-    ratings: row.ratings || [],
-    friends: row.friends || [],
-    friendRequests: row.friend_requests || { sent: [], received: [] },
-    following: row.following || [],
-    followers: row.followers || [],
-    savedProjects: row.saved_projects || [],
+    // fields not stored in DB — kept in memory only
+    ratings: [],
+    friends: [],
+    friendRequests: { sent: [], received: [] },
+    following: [],
+    followers: [],
+    savedProjects: [],
     createdAt: row.created_at,
   };
 };
@@ -43,14 +51,15 @@ const mapUserUpdate = (data) => {
     linkedin: 'linkedin_url',
     website: 'site_url',
     trustScore: 'trust_score',
-    friendRequests: 'friend_requests',
-    savedProjects: 'saved_projects',
-    createdAt: 'created_at',
   };
   const result = {};
   for (const [key, value] of Object.entries(data)) {
     if (key === 'id') continue;
-    result[colMap[key] || key] = value;
+    const dbKey = colMap[key] || key;
+    // only send columns that actually exist in the users table
+    if (VALID_USER_COLUMNS.has(dbKey)) {
+      result[dbKey] = value;
+    }
   }
   return result;
 };
@@ -68,14 +77,14 @@ export const signUpUser = async (email, password, profileData) => {
     linkedin_url: profileData.linkedin || '',
     site_url: profileData.website || '',
     trust_score: 0,
-    ratings: [],
-    friends: [],
-    friend_requests: { sent: [], received: [] },
-    following: [],
-    followers: [],
-    saved_projects: [],
   };
-  const { data, error } = await supabase.from('users').insert(row).select().single();
+
+  const insertPromise = supabase.from('users').insert(row).select().single();
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('Request timed out. Please check your connection and try again.')), 10000)
+  );
+
+  const { data, error } = await Promise.race([insertPromise, timeoutPromise]);
   if (error) {
     console.error('signUpUser error:', error);
     throw error;
