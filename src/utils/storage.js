@@ -1,7 +1,7 @@
 import { supabase } from '../firebase';
 
 // ── Sync utilities ───────────────────────────────────────────────────────────
-export const dmKey = (a, b) => [a, b].sort().join('::');
+export const dmKey = (a, b) => [a, b].sort().join('_');
 export const generateId = () => Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
 
 export const timeAgo = (isoString) => {
@@ -164,21 +164,54 @@ export const markAllNotifsRead = async (userId, allItems) => {
 
 // ── DMs ───────────────────────────────────────────────────────────────────────
 export const sendDM = async (convoKey, participants, message) => {
-  const { data: existing } = await supabase.from('messages').select('messages').eq('id', convoKey).single();
+  const { data: existing } = await supabase.from('messages').select('messages').eq('conversation_key', convoKey).single();
   const msgs = [...(existing?.messages || []), message];
   await supabase.from('messages').upsert({
-    id: convoKey,
+    conversation_key: convoKey,
     participants,
     messages: msgs,
-    updatedAt: new Date().toISOString(),
-  }, { onConflict: 'id' });
+    updated_at: new Date().toISOString(),
+  }, { onConflict: 'conversation_key' });
 };
 
 export const markDMsRead = async (convoKey, currentUserId, messages) => {
   const updated = messages.map(m =>
     m.senderId !== currentUserId ? { ...m, read: true } : m
   );
-  await supabase.from('messages').update({ messages: updated }).eq('id', convoKey);
+  await supabase.from('messages').update({ messages: updated }).eq('conversation_key', convoKey);
+};
+
+// ── Friendships ───────────────────────────────────────────────────────────────
+export const sendFriendRequest = async (senderId, receiverId) => {
+  const { error } = await supabase.from('friendships').insert({ user_id: senderId, friend_id: receiverId, status: 'pending' });
+  if (error) { console.error('sendFriendRequest error:', error); throw error; }
+};
+
+export const acceptFriendRequest = async (senderId, receiverId) => {
+  const { error } = await supabase.from('friendships').update({ status: 'accepted' }).eq('user_id', senderId).eq('friend_id', receiverId);
+  if (error) console.error('acceptFriendRequest error:', error);
+};
+
+export const declineFriendRequest = async (senderId, receiverId) => {
+  const { error } = await supabase.from('friendships').delete().eq('user_id', senderId).eq('friend_id', receiverId);
+  if (error) console.error('declineFriendRequest error:', error);
+};
+
+export const removeFriendship = async (userA, userB) => {
+  await supabase.from('friendships').delete()
+    .or(`and(user_id.eq.${userA},friend_id.eq.${userB}),and(user_id.eq.${userB},friend_id.eq.${userA})`);
+};
+
+export const subscribeToFriendships = (userId, callback) => {
+  const fetch = async () => {
+    const { data } = await supabase.from('friendships').select('*').or(`user_id.eq.${userId},friend_id.eq.${userId}`);
+    callback(data || []);
+  };
+  fetch();
+  const channel = supabase.channel(`friendships-${userId}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'friendships' }, fetch)
+    .subscribe();
+  return () => supabase.removeChannel(channel);
 };
 
 // ── Real-time subscriptions ───────────────────────────────────────────────────

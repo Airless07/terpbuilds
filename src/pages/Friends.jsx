@@ -1,13 +1,20 @@
-import { useState } from 'react';
-import { updateUser, addNotification, dmKey } from '../utils/storage';
+import { useState, useEffect } from 'react';
+import {
+  addNotification,
+  sendFriendRequest, acceptFriendRequest, declineFriendRequest,
+  removeFriendship, subscribeToFriendships,
+} from '../utils/storage';
 
-function UserCard({ user, currentUser, onAction, navigate }) {
+function UserCard({ user, currentUser, friendships, onAction, navigate }) {
   if (!user || user.id === currentUser?.id) return null;
-  const cu = currentUser;
-  const isFriend = cu?.friends?.includes(user.id);
-  const isFollowing = cu?.following?.includes(user.id);
-  const sentReq = cu?.friendRequests?.sent?.includes(user.id);
-  const receivedReq = cu?.friendRequests?.received?.includes(user.id);
+
+  const myFriendship = friendships.find(f =>
+    (f.user_id === currentUser.id && f.friend_id === user.id) ||
+    (f.user_id === user.id && f.friend_id === currentUser.id)
+  );
+  const isFriend = myFriendship?.status === 'accepted';
+  const sentReq = myFriendship?.status === 'pending' && myFriendship?.user_id === currentUser.id;
+  const receivedReq = myFriendship?.status === 'pending' && myFriendship?.friend_id === currentUser.id;
 
   return (
     <div className="card" style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start' }}>
@@ -39,11 +46,6 @@ function UserCard({ user, currentUser, onAction, navigate }) {
         ) : (
           <button className="btn btn-outline btn-sm" onClick={() => onAction('addFriend', user)}>+ Friend</button>
         )}
-        {isFollowing ? (
-          <button className="btn btn-ghost btn-sm" onClick={() => onAction('unfollow', user)}>Unfollow</button>
-        ) : (
-          <button className="btn btn-outline btn-sm" onClick={() => onAction('follow', user)}>Follow</button>
-        )}
         <button className="btn btn-primary btn-sm" onClick={() => { navigate('messages'); localStorage.setItem('tb_open_dm', user.id); }}>
           Message
         </button>
@@ -52,9 +54,15 @@ function UserCard({ user, currentUser, onAction, navigate }) {
   );
 }
 
-export default function Friends({ currentUser, setCurrentUser, navigate, users }) {
+export default function Friends({ currentUser, navigate, users }) {
   const [tab, setTab] = useState('friends');
   const [search, setSearch] = useState('');
+  const [friendships, setFriendships] = useState([]);
+
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    return subscribeToFriendships(currentUser.id, setFriendships);
+  }, [currentUser?.id]);
 
   if (!currentUser) {
     return (
@@ -68,64 +76,40 @@ export default function Friends({ currentUser, setCurrentUser, navigate, users }
     );
   }
 
-  const cu = users.find(u => u.id === currentUser.id) || currentUser;
-  const friends = users.filter(u => cu.friends?.includes(u.id));
-  const following = users.filter(u => cu.following?.includes(u.id));
-  const pendingRequests = users.filter(u => cu.friendRequests?.received?.includes(u.id));
+  const accepted = friendships.filter(f => f.status === 'accepted');
+  const friendIds = accepted.map(f => f.user_id === currentUser.id ? f.friend_id : f.user_id);
+  const friends = users.filter(u => friendIds.includes(u.id));
+
+  const incoming = friendships.filter(f => f.friend_id === currentUser.id && f.status === 'pending');
+  const outgoing = friendships.filter(f => f.user_id === currentUser.id && f.status === 'pending');
+  const incomingUsers = incoming.map(f => users.find(u => u.id === f.user_id)).filter(Boolean);
+  const outgoingUsers = outgoing.map(f => users.find(u => u.id === f.friend_id)).filter(Boolean);
 
   const doAction = async (action, targetUser) => {
-    const me = { ...cu };
-    const them = users.find(u => u.id === targetUser.id);
-    if (!them) return;
-    const themCopy = { ...them };
-
     switch (action) {
       case 'addFriend':
-        if (!me.friendRequests?.sent?.includes(them.id)) {
-          me.friendRequests = { ...me.friendRequests, sent: [...(me.friendRequests?.sent || []), them.id] };
-          themCopy.friendRequests = { ...themCopy.friendRequests, received: [...(themCopy.friendRequests?.received || []), me.id] };
-          await addNotification(them.id, { type: 'friendRequest', text: `${me.displayName} sent you a friend request.`, page: 'friends' });
-        }
+        await sendFriendRequest(currentUser.id, targetUser.id);
+        await addNotification(targetUser.id, { type: 'friendRequest', text: `${currentUser.displayName} sent you a friend request.`, page: 'friends' });
         break;
       case 'acceptFriend':
-        me.friends = [...(me.friends || []), them.id];
-        themCopy.friends = [...(themCopy.friends || []), me.id];
-        me.friendRequests = { ...me.friendRequests, received: (me.friendRequests?.received || []).filter(id => id !== them.id) };
-        themCopy.friendRequests = { ...themCopy.friendRequests, sent: (themCopy.friendRequests?.sent || []).filter(id => id !== me.id) };
-        await addNotification(them.id, { type: 'friendRequest', text: `${me.displayName} accepted your friend request!`, page: 'friends' });
+        await acceptFriendRequest(targetUser.id, currentUser.id);
+        await addNotification(targetUser.id, { type: 'accepted', text: `${currentUser.displayName} accepted your friend request!`, page: 'friends' });
         break;
       case 'denyFriend':
-        me.friendRequests = { ...me.friendRequests, received: (me.friendRequests?.received || []).filter(id => id !== them.id) };
-        themCopy.friendRequests = { ...themCopy.friendRequests, sent: (themCopy.friendRequests?.sent || []).filter(id => id !== me.id) };
+        await declineFriendRequest(targetUser.id, currentUser.id);
         break;
       case 'removeFriend':
-        me.friends = (me.friends || []).filter(id => id !== them.id);
-        themCopy.friends = (themCopy.friends || []).filter(id => id !== me.id);
-        break;
-      case 'follow':
-        if (!me.following?.includes(them.id)) {
-          me.following = [...(me.following || []), them.id];
-          themCopy.followers = [...(themCopy.followers || []), me.id];
-          await addNotification(them.id, { type: 'followed', text: `${me.displayName} started following you.`, page: 'friends' });
-        }
-        break;
-      case 'unfollow':
-        me.following = (me.following || []).filter(id => id !== them.id);
-        themCopy.followers = (themCopy.followers || []).filter(id => id !== me.id);
+        await removeFriendship(currentUser.id, targetUser.id);
         break;
       default:
         break;
     }
-
-    setCurrentUser(me);
-    await updateUser(me.id, me);
-    await updateUser(themCopy.id, themCopy);
   };
 
   const discoverSearch = search.toLowerCase();
   const discover = users.filter(u =>
-    u.id !== cu.id &&
-    !cu.friends?.includes(u.id) &&
+    u.id !== currentUser.id &&
+    !friendIds.includes(u.id) &&
     (discoverSearch === '' ||
       u.displayName.toLowerCase().includes(discoverSearch) ||
       u.skills?.some(s => s.toLowerCase().includes(discoverSearch)))
@@ -133,8 +117,7 @@ export default function Friends({ currentUser, setCurrentUser, navigate, users }
 
   const TABS = [
     { id: 'friends', label: `Friends (${friends.length})` },
-    { id: 'following', label: `Following (${following.length})` },
-    { id: 'requests', label: `Requests${pendingRequests.length > 0 ? ` (${pendingRequests.length})` : ''}` },
+    { id: 'requests', label: `Requests${incoming.length > 0 ? ` (${incoming.length})` : ''}` },
     { id: 'discover', label: 'Find People' },
   ];
 
@@ -158,34 +141,46 @@ export default function Friends({ currentUser, setCurrentUser, navigate, users }
               <p>No friends yet. Discover people in the Find People tab!</p>
             </div>
           ) : (
-            friends.map(u => <UserCard key={u.id} user={u} currentUser={cu} onAction={doAction} navigate={navigate} />)
-          )}
-        </div>
-      )}
-
-      {tab === 'following' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-          {following.length === 0 ? (
-            <div className="empty-state">
-              <div className="empty-icon">👀</div>
-              <p>Not following anyone yet.</p>
-            </div>
-          ) : (
-            following.map(u => <UserCard key={u.id} user={u} currentUser={cu} onAction={doAction} navigate={navigate} />)
+            friends.map(u => <UserCard key={u.id} user={u} currentUser={currentUser} friendships={friendships} onAction={doAction} navigate={navigate} />)
           )}
         </div>
       )}
 
       {tab === 'requests' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-          {pendingRequests.length === 0 ? (
-            <div className="empty-state">
-              <div className="empty-icon">🤝</div>
-              <p>No pending friend requests.</p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          <div>
+            <div style={{ fontSize: '0.8rem', color: 'var(--text3)', fontFamily: 'var(--font-mono)', marginBottom: '0.75rem' }}>
+              INCOMING ({incomingUsers.length})
             </div>
-          ) : (
-            pendingRequests.map(u => <UserCard key={u.id} user={u} currentUser={cu} onAction={doAction} navigate={navigate} />)
-          )}
+            {incomingUsers.length === 0 ? (
+              <div className="empty-state" style={{ padding: '1.5rem' }}>
+                <div className="empty-icon">🤝</div>
+                <p>No incoming friend requests.</p>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                {incomingUsers.map(u => (
+                  <UserCard key={u.id} user={u} currentUser={currentUser} friendships={friendships} onAction={doAction} navigate={navigate} />
+                ))}
+              </div>
+            )}
+          </div>
+          <div>
+            <div style={{ fontSize: '0.8rem', color: 'var(--text3)', fontFamily: 'var(--font-mono)', marginBottom: '0.75rem' }}>
+              OUTGOING ({outgoingUsers.length})
+            </div>
+            {outgoingUsers.length === 0 ? (
+              <div className="empty-state" style={{ padding: '1.5rem' }}>
+                <p style={{ color: 'var(--text3)', fontSize: '0.875rem' }}>No outgoing requests.</p>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                {outgoingUsers.map(u => (
+                  <UserCard key={u.id} user={u} currentUser={currentUser} friendships={friendships} onAction={doAction} navigate={navigate} />
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -203,7 +198,7 @@ export default function Friends({ currentUser, setCurrentUser, navigate, users }
                 <p>No users found matching your search.</p>
               </div>
             ) : (
-              discover.map(u => <UserCard key={u.id} user={u} currentUser={cu} onAction={doAction} navigate={navigate} />)
+              discover.map(u => <UserCard key={u.id} user={u} currentUser={currentUser} friendships={friendships} onAction={doAction} navigate={navigate} />)
             )}
           </div>
         </div>

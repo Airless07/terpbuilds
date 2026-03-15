@@ -1,17 +1,27 @@
 import { useState, useEffect, useRef } from 'react';
-import { dmKey, generateId, timeAgo, sendDM, markDMsRead } from '../utils/storage';
+import { dmKey, generateId, timeAgo, sendDM, markDMsRead, fetchUser } from '../utils/storage';
 
-function NewMessageModal({ onClose, onOpen, currentUserId, users }) {
+function NewMessageModal({ onClose, onOpen, currentUserId }) {
   const [userId, setUserId] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault();
     setError('');
-    const target = users.find(u => u.id === userId.trim() && u.id !== currentUserId);
-    if (!target) { setError('No user found with that ID.'); return; }
-    onOpen(target);
-    onClose();
+    const trimmed = userId.trim();
+    if (!trimmed || trimmed === currentUserId) { setError('Please enter a valid user ID.'); return; }
+    setLoading(true);
+    try {
+      const user = await fetchUser(trimmed);
+      if (!user) { setError('No user found with that ID.'); return; }
+      onOpen(user);
+      onClose();
+    } catch {
+      setError('No user found with that ID.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -21,13 +31,10 @@ function NewMessageModal({ onClose, onOpen, currentUserId, users }) {
           <h3 className="modal-title">💬 New Message</h3>
           <button className="close-btn" onClick={onClose}>✕</button>
         </div>
-
         <p style={{ fontSize: '0.875rem', color: 'var(--text2)', marginBottom: '1.25rem' }}>
           Paste a user's ID to start a conversation. You can find your own ID on your Profile page.
         </p>
-
         {error && <div className="alert alert-error" style={{ marginBottom: '1rem' }}>{error}</div>}
-
         <form onSubmit={submit}>
           <div className="form-group">
             <label>Enter User ID</label>
@@ -41,7 +48,9 @@ function NewMessageModal({ onClose, onOpen, currentUserId, users }) {
             />
           </div>
           <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem' }}>
-            <button className="btn btn-primary" type="submit">Open Conversation</button>
+            <button className="btn btn-primary" type="submit" disabled={loading}>
+              {loading ? 'Looking up...' : 'Open Conversation'}
+            </button>
             <button className="btn btn-ghost" type="button" onClick={onClose}>Cancel</button>
           </div>
         </form>
@@ -61,12 +70,12 @@ export default function Messages({ currentUser, navigate, dms, users }) {
     const openId = localStorage.getItem('tb_open_dm');
     if (openId) {
       localStorage.removeItem('tb_open_dm');
-      const key = dmKey(currentUser.id, openId);
-      setActiveConvoKey(key);
+      setActiveConvoKey(dmKey(currentUser.id, openId));
     }
   }, [currentUser]);
 
-  const activeConvo = dms.find(d => d.id === activeConvoKey);
+  // Match by conversation_key column (not id)
+  const activeConvo = dms.find(d => d.conversation_key === activeConvoKey);
   const messages = activeConvo?.messages || [];
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
@@ -79,7 +88,7 @@ export default function Messages({ currentUser, navigate, dms, users }) {
       if (!other) return null;
       const msgs = d.messages || [];
       const unread = msgs.filter(m => !m.read && m.senderId !== currentUser.id).length;
-      return { key: d.id, other, lastMsg: msgs[msgs.length - 1], unread };
+      return { key: d.conversation_key, other, lastMsg: msgs[msgs.length - 1], unread };
     })
     .filter(Boolean)
     .sort((a, b) => new Date(b.lastMsg?.timestamp || 0) - new Date(a.lastMsg?.timestamp || 0));
@@ -87,7 +96,7 @@ export default function Messages({ currentUser, navigate, dms, users }) {
   const openConversation = async (otherUser) => {
     const key = dmKey(currentUser.id, otherUser.id);
     setActiveConvoKey(key);
-    const convo = dms.find(d => d.id === key);
+    const convo = dms.find(d => d.conversation_key === key);
     if (convo && convo.messages?.some(m => !m.read && m.senderId !== currentUser.id)) {
       await markDMsRead(key, currentUser.id, convo.messages || []);
     }
@@ -95,19 +104,23 @@ export default function Messages({ currentUser, navigate, dms, users }) {
 
   const sendMessage = async () => {
     if (!input.trim() || !activeConvoKey) return;
-    const otherId = activeConvoKey.split('::').find(id => id !== currentUser.id);
+    // UUIDs only contain hyphens, so splitting by '_' gives exactly the two user IDs
+    const parts = activeConvoKey.split('_');
+    const otherId = parts.find(id => id !== currentUser.id);
     const participants = activeConvo?.participants || [currentUser.id, otherId];
     const msg = {
       id: generateId(), senderId: currentUser.id, senderName: currentUser.displayName,
-      text: input.trim(), timestamp: new Date().toISOString(), read: false
+      text: input.trim(), timestamp: new Date().toISOString(), read: false,
     };
     setInput('');
     await sendDM(activeConvoKey, participants, msg);
   };
 
-  const activeOther = activeConvo
-    ? users.find(u => u.id === activeConvo.participants?.find(id => id !== currentUser.id))
-    : null;
+  // Resolve the other user even before any message exists (derive from convoKey)
+  const activeOtherId = activeConvo
+    ? activeConvo.participants?.find(id => id !== currentUser.id)
+    : activeConvoKey?.split('_').find(id => id !== currentUser?.id);
+  const activeOther = activeOtherId ? users.find(u => u.id === activeOtherId) : null;
 
   if (!currentUser) return null;
 
@@ -213,7 +226,6 @@ export default function Messages({ currentUser, navigate, dms, users }) {
       {showNewModal && (
         <NewMessageModal
           currentUserId={currentUser.id}
-          users={users}
           onClose={() => setShowNewModal(false)}
           onOpen={(user) => openConversation(user)}
         />
